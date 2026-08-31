@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Signal — Flow</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,500;9..144,600;9..144,700&family=Work+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="shell" id="shell">
+
+  <aside class="sidebar" id="sidebarMount" data-active="flow"></aside>
+
+  <main class="main">
+    <div class="page-eyebrow">One thing, for a while</div>
+    <div class="page-head sticky-head">
+      <h1 class="page-title">Flow</h1>
+    </div>
+    <p class="page-desc">A timer that keeps running even if you refresh or come back later.</p>
+
+    <div class="flow-layout">
+      <div class="flow-tasks-panel">
+        <div class="flow-tasks-heading" id="flowTasksHeading">Tasks</div>
+        <div class="flow-task-list" id="flowTaskList"></div>
+        <div id="flowCustomTaskArea"></div>
+      </div>
+
+      <div class="flow-timer-wrap">
+        <div class="flow-ring-box">
+          <svg viewBox="0 0 300 300" class="flow-ring-svg">
+            <circle class="flow-ring-track" cx="150" cy="150" r="130"></circle>
+            <circle class="flow-ring-progress" id="flowRingProgress" cx="150" cy="150" r="130"></circle>
+          </svg>
+          <div class="flow-ring-center" id="flowRingCenter">
+            <div class="flow-time" id="flowTimeLabel">25:00</div>
+            <div class="flow-state-label" id="flowStateLabel">ready</div>
+            <div class="flow-ended-banner" id="flowEndedBanner">Time's up</div>
+          </div>
+        </div>
+
+        <div class="flow-controls">
+          <div class="flow-duration-row">
+            <label for="flowDurationInput">Minutes</label>
+            <input type="number" id="flowDurationInput" min="1" step="1" value="25">
+            <button class="ghost-btn" id="flowSetBtn" type="button">Set</button>
+          </div>
+          <div class="flow-presets">
+            <button class="tab-btn" data-min="5">5</button>
+            <button class="tab-btn" data-min="15">15</button>
+            <button class="tab-btn" data-min="25">25</button>
+            <button class="tab-btn" data-min="45">45</button>
+            <button class="tab-btn" data-min="60">60</button>
+          </div>
+          <div class="flow-action-row">
+            <button class="submit" id="flowStartBtn" type="button">Start</button>
+            <button class="ghost-btn" id="flowPauseBtn" type="button" style="display:none;">Pause</button>
+            <button class="ghost-btn" id="flowResetBtn" type="button">Reset</button>
+          </div>
+        </div>
+
+        <div class="flow-cycle-note">The 4-stage flow cycle is coming later — for now, this is just the timer.</div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script src="nav.js"></script>
+<script src="data.js"></script>
+<script src="flow.js"></script>
+</body>
+</html>

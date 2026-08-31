@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Signal — Habit</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,500;9..144,600;9..144,700&family=Work+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="shell" id="shell">
+
+  <aside class="sidebar" id="sidebarMount" data-active="habits"></aside>
+
+  <main class="main">
+    <div class="page-head">
+      <button class="ghost-btn" id="backBtn" style="display:inline-flex; margin-bottom:18px;">← Back</button>
+    </div>
+
+    <div class="habit-detail-hero" id="habitHero"></div>
+
+    <div class="habit-edit-form" id="habitEditForm" style="display:none;">
+      <div class="edit-row edit-row-icon-color">
+        <div class="field">
+          <span class="field-hint">Name</span>
+          <input type="text" class="name-input" id="editName">
+        </div>
+        <div class="field icon-field">
+          <span class="field-hint">Icon</span>
+          <input type="text" id="editIcon" placeholder="●" maxlength="3">
+          <button type="button" class="icon-hint-btn" id="editIconHintBtn" title="Pick an emoji">☺</button>
+          <div class="emoji-popup" id="editIconPopup" style="display:none;"></div>
+        </div>
+        <div class="field">
+          <span class="field-hint">Color</span>
+          <div class="color-picker" id="editColorPicker"></div>
+        </div>
+      </div>
+      <div class="edit-row edit-row-metric">
+        <div class="field">
+          <span class="field-hint">Default metric</span>
+          <input type="text" class="name-input" id="editMetric" placeholder="e.g. 10 pushups" style="width:150px;">
+        </div>
+      </div>
+      <div class="edit-row edit-actions">
+        <button class="ghost-btn" id="editCancelBtn" type="button">Cancel</button>
+        <button class="submit" id="editSaveBtn" type="button">Save changes</button>
+      </div>
+    </div>
+
+    <div class="day-nav">
+      <button id="hPrev" title="Previous day">‹</button>
+      <span class="current-date" id="hCurrentDateLabel">—</span>
+      <button id="hNext" title="Next day">›</button>
+      <button class="today-btn" id="hToday">today</button>
+      <div class="day-nav-actions">
+        <button class="ghost-btn" id="editToggleBtn">Edit</button>
+      </div>
+    </div>
+    <div class="today-toggle-row">
+      <button class="habit-toggle" id="detailToggle" title="Mark done"></button>
+      <div class="metric-cell" id="detailMetricCell"></div>
+      <input type="text" id="detailNoteInput" placeholder="Note…">
+    </div>
+
+    <div class="tabs">
+      <button class="tab-btn active" id="tabMonth">Month</button>
+      <button class="tab-btn" id="tabYear">Year</button>
+    </div>
+
+    <div id="monthView">
+      <div class="cal-nav">
+        <button id="mCalPrev">‹</button>
+        <span class="cal-label" id="mCalLabel">—</span>
+        <button id="mCalNext">›</button>
+      </div>
+      <div class="cal-grid" id="mCalGrid"></div>
+    </div>
+
+    <div id="yearView" style="display:none;">
+      <div class="year-nav">
+        <button id="yPrev">‹</button>
+        <span class="year-label" id="yLabel">—</span>
+        <button id="yNext">›</button>
+      </div>
+      <div class="year-heatmap-wrap">
+        <div class="year-months" id="yMonths"></div>
+        <div style="display:flex;">
+          <div class="year-dow-labels"><span></span><span>Mon</span><span></span><span>Wed</span><span></span><span>Fri</span><span></span></div>
+          <div class="year-heatmap" id="yGrid"></div>
+        </div>
+        <div class="year-hover-label" id="yHoverLabel">Hover or click a day</div>
+      </div>
+    </div>
+
+    <h2 class="block-title" style="margin: 32px 0 14px;">Log</h2>
+    <div class="habit-log-feed" id="logFeed"></div>
+
+    <div class="habit-danger-zone">
+      <button class="ghost-btn" id="archiveHabitBtn">Move to archive</button>
+      <button class="danger" id="deleteHabitBtn">Delete habit</button>
+    </div>
+  </main>
+</div>
+
+<!-- day-detail modal: opened from a month/year click -->
+<div class="modal-overlay" id="dayDetailOverlay" style="display:none;">
+  <div class="modal">
+    <h3 id="dayDetailTitle">—</h3>
+    <div style="display:flex; align-items:center; gap:10px; margin-top:14px;">
+      <button class="habit-toggle" id="ddToggle" title="Mark done"></button>
+      <span style="font-family:var(--font-mono); font-size:11.5px; color:var(--ink-dim);" id="ddToggleLabel">Not done</span>
+    </div>
+    <label>Metric</label>
+    <input type="text" id="ddMetric" placeholder="metric…">
+    <div class="metric-hint" id="ddMetricHint"></div>
+    <label>Note</label>
+    <textarea id="ddNote" placeholder="note…"></textarea>
+    <div class="modal-actions">
+      <div class="spacer"></div>
+      <button class="ghost-btn" id="ddCancelBtn" type="button">Cancel</button>
+      <button class="submit" id="ddSaveBtn" type="button">Save</button>
+    </div>
+  </div>
+</div>
+
+<script src="nav.js"></script>
+<script src="emoji-data.js"></script>
+<script src="data.js"></script>
+<script src="habit-detail.js"></script>
+</body>
+</html>

@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Signal — Journal Entry</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,500;9..144,600;9..144,700&family=Work+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="shell" id="shell">
+
+  <aside class="sidebar" id="sidebarMount" data-active="notes"></aside>
+
+  <main class="main">
+    <div class="page-head">
+      <a href="journal.html" class="ghost-btn" style="display:inline-flex; margin-bottom:18px;">← Journal</a>
+    </div>
+
+    <div class="journal-entry-hero" id="jeHero"></div>
+
+    <div id="jeViewMode">
+      <div class="journal-entry-text" id="jeText"></div>
+      <div class="journal-entry-actions">
+        <button class="ghost-btn" id="jeEditBtn">Edit</button>
+      </div>
+    </div>
+
+    <div id="jeEditMode" style="display:none;">
+      <div class="richtext-toolbar" id="jeToolbar">
+        <button type="button" data-cmd="bold" title="Bold"><b>B</b></button>
+        <button type="button" data-cmd="italic" title="Italic"><i>I</i></button>
+        <button type="button" data-cmd="underline" title="Underline"><u>U</u></button>
+        <button type="button" data-cmd="strikeThrough" title="Strikethrough"><s>S</s></button>
+        <span class="richtext-sep"></span>
+        <button type="button" data-cmd="bigger" title="Bigger (select text first)">A+</button>
+        <button type="button" data-cmd="smaller" title="Smaller (select text first)">A-</button>
+        <span class="richtext-sep"></span>
+        <button type="button" data-cmd="insertUnorderedList" title="Bullet list">☰•</button>
+        <button type="button" data-cmd="insertOrderedList" title="Numbered list">☰1.</button>
+      </div>
+      <div class="journal-entry-textarea" id="jeTextarea" contenteditable="true" data-placeholder="Write about this day…"></div>
+      <div class="journal-entry-actions">
+        <button class="ghost-btn" id="jeCancelBtn" type="button">Cancel</button>
+        <button class="submit" id="jeSaveBtn" type="button">Save</button>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script src="nav.js"></script>
+<script src="data.js"></script>
+<script src="richtext.js"></script>
+<script>
+  function escapeHtml(str) {
+    return String(str).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+  function ddmmyyyy(dateStr) { const [y, m, d] = dateStr.split('-'); return `${d}-${m}-${y}`; }
+  function parseDateStr(s) { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); }
+  const DOW = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  function friendlyLongDate(dateStr) {
+    const d = parseDateStr(dateStr);
+    return DOW[d.getDay()] + ', ' + d.getDate() + ' ' + MONTHS[d.getMonth()] + ' ' + d.getFullYear();
+  }
+
+  const params = new URLSearchParams(location.search);
+  const date = params.get('date');
+  let currentText = '';
+
+  if (!date) {
+    document.querySelector('.main').innerHTML = '<p class="page-desc">No entry specified. <a href="journal.html" style="color:var(--gold)">Back to Journal →</a></p>';
+  } else {
+    const entry = Data.getJournalEntry(date);
+    currentText = entry ? normalizeStoredHtml(entry.text) : '';
+    document.title = 'Signal — ' + ddmmyyyy(date);
+
+    document.getElementById('jeHero').innerHTML = `
+      <h1>${ddmmyyyy(date)}</h1>
+      <div class="je-sub">${friendlyLongDate(date)}</div>
+    `;
+
+    // this is the dedicated full-page editor, so let it grow to fit everything and rely on
+    // the page's own scrollbar — no internal cap/scrollbar the way the compact Today notes box has.
+    const jeEditor = initRichTextEditor(document.getElementById('jeTextarea'), document.getElementById('jeToolbar'), { capPx: Infinity });
+
+    function renderView() {
+      document.getElementById('jeText').innerHTML = currentText || '';
+      document.getElementById('jeViewMode').style.display = '';
+      document.getElementById('jeEditMode').style.display = 'none';
+    }
+
+    document.getElementById('jeEditBtn').addEventListener('click', () => {
+      jeEditor.setHtml(currentText);
+      document.getElementById('jeViewMode').style.display = 'none';
+      document.getElementById('jeEditMode').style.display = '';
+      document.getElementById('jeTextarea').focus();
+    });
+    document.getElementById('jeCancelBtn').addEventListener('click', renderView);
+    document.getElementById('jeSaveBtn').addEventListener('click', () => {
+      currentText = jeEditor.getHtml();
+      Data.upsertJournalEntry(date, currentText);
+      renderView();
+    });
+
+    renderView();
+  }
+</script>
+</body>
+</html>

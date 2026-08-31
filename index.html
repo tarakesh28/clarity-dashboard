@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Signal — Today</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,500;9..144,600;9..144,700&family=Work+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="styles.css">
+<script>
+  // Blocking, runs before body paints: if the splash already played this tab session,
+  // mark the root element so the overlay never renders at all — no flash, no re-play on refresh.
+  if (sessionStorage.getItem('mm_splashDone')) document.documentElement.classList.add('no-splash');
+</script>
+</head>
+<body>
+<div class="splash-overlay" id="splashOverlay">
+  <span class="splash-word">Signal<span class="accent">.</span></span>
+</div>
+<audio id="splashAudio" src="assets/sfx/startup.mp3" preload="auto"></audio>
+<div class="shell" id="shell">
+
+  <aside class="sidebar" id="sidebarMount" data-active="today"></aside>
+
+  <main class="main">
+    <div class="page-head sticky-head no-desc">
+      <div class="page-title-row">
+        <h1 class="page-title">Today</h1>
+        <span class="page-date" id="todayLongDate">—</span>
+      </div>
+    </div>
+
+    <!-- ===================== SECTION 1 — MENTAL MODELS (pinned only) ===================== -->
+    <section class="block" id="models">
+      <div class="block-head">
+        <h2 class="block-title">Mental Models</h2>
+        <a href="models.html" class="ghost-btn" style="display:inline-flex;">View all →</a>
+      </div>
+      <div class="models-grid" id="homeModelsGrid"></div>
+      <p class="empty-note" id="noPinnedNote" style="display:none;">Nothing pinned yet — <a href="models.html" style="color:var(--gold)">pin a couple of models</a> to see them here.</p>
+    </section>
+
+    <div class="retrace-divider" id="modelsRetraceDivider">
+      <svg width="26" height="20" viewBox="0 0 26 20" fill="none"><path d="M24 3C18 1 9 4 4 14M4 14L2 8M4 14L10 13" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span class="label">models → plan</span>
+      <div class="rule"></div>
+    </div>
+
+    <!-- ===================== SECTION 2 — DAY LIST ===================== -->
+    <section class="block" id="daylist">
+      <div class="block-head">
+        <h2 class="block-title">Day List <small>chronological plan for today</small></h2>
+      </div>
+
+      <div class="day-nav">
+        <div class="day-nav-dategroup" id="taskDateNavGroup">
+          <button id="dayPrev" title="Previous day">‹</button>
+          <span class="current-date" id="currentDateLabel">—</span>
+          <button id="dayNext" title="Next day">›</button>
+          <button class="today-btn" id="dayToday">today</button>
+        </div>
+      </div>
+
+      <div id="daySearchWrap" style="display:none;">
+        <div class="search-box" style="margin-top:0;">
+          <input type="text" id="daySearchInput" placeholder="Search everything you've ever logged in the day list…">
+          <button id="daySearchBtn">Search</button>
+        </div>
+        <div class="search-results" id="daySearchResults"></div>
+      </div>
+
+      <form class="add-form" id="addEntryForm">
+        <input class="task-text" id="entryText" type="text" placeholder="What are you doing next? (time &amp; duration optional)" required>
+        <input class="task-time" id="entryTime" type="time">
+        <div class="ampm-toggle" id="entryAmpmToggle">
+          <button type="button" data-period="AM">AM</button>
+          <button type="button" data-period="PM">PM</button>
+        </div>
+        <div class="dur-input">
+          <input type="number" id="entryDurValue" min="0" step="1" placeholder="0">
+          <select id="entryDurUnit">
+            <option value="min">min</option>
+            <option value="hour">hour</option>
+          </select>
+        </div>
+        <div class="task-color-picker" id="entryColorPicker"></div>
+        <input class="task-notes" id="entryNotes" type="text" placeholder="notes (optional)">
+        <button class="submit" type="submit">Add</button>
+      </form>
+
+      <div class="task-tools-row" id="taskToolsRow">
+        <button class="flow-shortcut-btn" id="flowShortcutBtn" type="button" title="Open the Flow timer">⏱️ Flow</button>
+        <div class="day-nav-actions" id="taskNavActions">
+          <button class="ghost-btn" id="taskSelectBtn">Select</button>
+          <button class="ghost-btn" id="daySearchToggleBtn">Search</button>
+        </div>
+        <div class="habits-mass-bar" id="taskMassBar" style="display:none;">
+          <button class="ghost-btn" id="taskMassDoneBtn" type="button">Mark done</button>
+          <button class="ghost-btn" id="taskMassToggleArchiveBtn" type="button">Archive selected</button>
+          <button class="ghost-btn danger-ghost" id="taskMassDeleteBtn" type="button">Delete selected</button>
+          <button class="ghost-btn" id="taskMassCancelBtn" type="button">Cancel</button>
+        </div>
+      </div>
+
+      <div class="section-toolbar">
+        <button class="section-collapse-btn" id="tasksCollapseBtn"><span class="sc-arrow">▾</span> Tasks</button>
+        <div class="list-mode-tabs" id="listModeTabs">
+          <button class="tab-btn" data-mode="custom">Custom</button>
+          <button class="tab-btn" data-mode="timed">Timed</button>
+          <button class="tab-btn" data-mode="priority">Priority</button>
+        </div>
+      </div>
+      <div class="priority-tools" id="priorityTools" style="display:none;">
+        <button class="ghost-btn" id="clearPrioritiesBtn" type="button">Clear all priorities</button>
+        <button class="ghost-btn danger-ghost" id="deleteUnprioritizedBtn" type="button">Delete unprioritized</button>
+      </div>
+      <div id="tasksBody">
+        <div class="day-entries" id="dayEntriesContainer"></div>
+        <button class="archive-toggle" id="archiveToggleBtn" type="button" style="display:none;">
+          <span class="sc-arrow" id="archiveArrow">▸</span> Archive <span class="archive-count" id="archiveCount"></span>
+        </button>
+        <div class="archive-list" id="archiveList" style="display:none;"></div>
+      </div>
+
+      <div class="section-divider"></div>
+
+      <div class="section-toolbar">
+        <button class="section-collapse-btn" id="chronoCollapseBtn"><span class="sc-arrow">▾</span> Timeline</button>
+      </div>
+      <div id="chronoBody">
+        <div class="day-grid-wrap">
+          <div class="day-grid">
+            <div id="gridSlots"></div>
+            <div class="grid-tasks" id="gridTasks"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div class="retrace-divider">
+      <svg width="26" height="20" viewBox="0 0 26 20" fill="none"><path d="M24 3C18 1 9 4 4 14M4 14L2 8M4 14L10 13" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span class="label">plan → practice</span>
+      <div class="rule"></div>
+    </div>
+
+    <!-- ===================== SECTION 3 — HABIT ===================== -->
+    <section class="block" id="habits">
+      <div class="block-head">
+        <h2 class="block-title">Habit <small>what you actually keep doing</small></h2>
+      </div>
+
+      <div class="day-nav">
+        <div class="day-nav-dategroup" id="habitDateNavGroup">
+          <button id="habitPrev" title="Previous day">‹</button>
+          <span class="current-date" id="habitDateLabel">—</span>
+          <button id="habitNext" title="Next day">›</button>
+          <button class="today-btn" id="habitToday">today</button>
+        </div>
+        <div class="day-nav-actions" id="habitNavActions">
+          <button class="ghost-btn" id="habitSelectBtn">Select</button>
+          <button class="ghost-btn" id="habitSearchToggleBtn">Search</button>
+        </div>
+        <div class="habits-mass-bar" id="habitTodayMassBar" style="display:none;">
+          <button class="ghost-btn" id="habitTodayMassDoneBtn" type="button">Mark done</button>
+          <button class="ghost-btn" id="habitTodayMassArchiveBtn" type="button">Archive selected</button>
+          <button class="ghost-btn danger-ghost" id="habitTodayMassDeleteBtn" type="button">Delete selected</button>
+          <button class="ghost-btn" id="habitTodayMassCancelBtn" type="button">Cancel</button>
+        </div>
+      </div>
+
+      <div id="habitSearchWrap" style="display:none;">
+        <div class="search-box" style="margin-top:0;">
+          <input type="text" id="habitSearchInput" placeholder="Search habits by name — completion doesn't matter…">
+          <button id="habitSearchBtn">Search</button>
+        </div>
+        <div class="search-results" id="habitSearchResults"></div>
+      </div>
+
+      <div class="tabs">
+        <button class="tab-btn active" id="tabToday">Today</button>
+        <button class="tab-btn" id="tabCalendar">Calendar</button>
+        <div class="day-nav-actions">
+          <button class="ghost-btn" id="habitCancelBtn" style="display:none;">Cancel</button>
+          <button class="ghost-btn" id="newHabitBtn">+ New habit</button>
+        </div>
+      </div>
+
+      <form class="habit-add" id="addHabitForm" style="display:none;">
+        <div class="field">
+          <span class="field-hint">Name</span>
+          <input type="text" class="name-input" id="habitName" placeholder="New habit" required>
+        </div>
+        <div class="field icon-field">
+          <span class="field-hint">Icon</span>
+          <input type="text" id="habitIcon" placeholder="●" maxlength="3">
+          <button type="button" class="icon-hint-btn" id="habitIconHintBtn" title="Pick an emoji">☺</button>
+          <div class="emoji-popup" id="habitIconPopup" style="display:none;"></div>
+        </div>
+        <div class="field">
+          <span class="field-hint">Color</span>
+          <div class="color-picker" id="habitColorPicker"></div>
+        </div>
+        <div class="field">
+          <span class="field-hint">Metric (optional)</span>
+          <input type="text" class="name-input" id="habitMetric" placeholder="e.g. 10 pushups" style="width:140px;">
+        </div>
+        <button class="submit" type="submit">Add habit</button>
+      </form>
+
+      <div id="habitTodayView">
+        <div class="habit-today-list" id="habitTodayList"></div>
+      </div>
+
+      <div id="habitCalendarView" style="display:none;">
+        <div class="cal-nav">
+          <button id="calPrev">‹</button>
+          <span class="cal-label" id="calLabel">—</span>
+          <button id="calNext">›</button>
+        </div>
+        <div class="cal-legend" id="calLegend"></div>
+        <div class="cal-grid" id="calGrid"></div>
+        <div class="cal-detail" id="calDetail" style="display:none;"></div>
+      </div>
+    </section>
+
+    <div class="retrace-divider">
+      <svg width="26" height="20" viewBox="0 0 26 20" fill="none"><path d="M24 3C18 1 9 4 4 14M4 14L2 8M4 14L10 13" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span class="label">practice → reflect</span>
+      <div class="rule"></div>
+    </div>
+
+    <!-- ===================== SECTION 4 — NOTES ===================== -->
+    <section class="block" id="notes">
+      <div class="block-head">
+        <h2 class="block-title">Notes</h2>
+      </div>
+      <div class="richtext-toolbar" id="journalToolbar">
+        <button type="button" data-cmd="bold" title="Bold"><b>B</b></button>
+        <button type="button" data-cmd="italic" title="Italic"><i>I</i></button>
+        <button type="button" data-cmd="underline" title="Underline"><u>U</u></button>
+        <button type="button" data-cmd="strikeThrough" title="Strikethrough"><s>S</s></button>
+        <span class="richtext-sep"></span>
+        <button type="button" data-cmd="bigger" title="Bigger (select text first)">A+</button>
+        <button type="button" data-cmd="smaller" title="Smaller (select text first)">A-</button>
+        <span class="richtext-sep"></span>
+        <button type="button" data-cmd="insertUnorderedList" title="Bullet list">☰•</button>
+        <button type="button" data-cmd="insertOrderedList" title="Numbered list">☰1.</button>
+      </div>
+      <div class="journal-textarea" id="journalTextarea" contenteditable="true" data-placeholder="Write today's entry…"></div>
+      <button class="journal-expand-btn" id="journalExpandBtn" type="button" style="display:none;">▾ Expand</button>
+      <div class="journal-save-hint">Saves automatically · <a href="journal.html" style="color:var(--gold)">view all entries →</a></div>
+    </section>
+
+    <div class="future-note" id="futureNote"></div>
+
+  </main>
+</div>
+
+<nav class="side-rail" id="sideRail"></nav>
+
+<!-- day-list entry add/edit modal -->
+<div class="modal-overlay" id="entryModalOverlay" style="display:none;">
+  <div class="modal">
+    <h3 id="entryModalTitle">Add task</h3>
+    <label>Name</label>
+    <input type="text" id="modalText" placeholder="What are you doing?">
+    <div class="modal-row">
+      <div>
+        <label>Time <span class="field-hint-inline">(bksp to clear)</span></label>
+        <div style="display:flex; gap:6px; align-items:center;">
+          <input type="time" id="modalTime" style="flex:1;">
+          <div class="ampm-toggle" id="modalAmpmToggle">
+            <button type="button" data-period="AM">AM</button>
+            <button type="button" data-period="PM">PM</button>
+          </div>
+        </div>
+      </div>
+      <div>
+        <label>Duration</label>
+        <div class="dur-input">
+          <input type="number" id="modalDurValue" min="0" step="1">
+          <select id="modalDurUnit">
+            <option value="min">min</option>
+            <option value="hour">hour</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <label>Color</label>
+    <div class="task-color-picker" id="modalColorPicker"></div>
+    <label>Notes</label>
+    <textarea id="modalNotes" placeholder="optional notes…"></textarea>
+
+    <div class="modal-repeat-row">
+      <span class="rr-label">🔁 Repeat daily</span>
+      <label class="switch">
+        <input type="checkbox" id="modalRepeat">
+        <span class="track"></span>
+      </label>
+    </div>
+    <div class="modal-repeat-hint" id="modalRepeatHint"></div>
+
+    <div class="modal-actions">
+      <button class="danger" id="modalDelete" style="display:none;">Delete</button>
+      <button class="ghost-btn" id="modalArchive" style="display:none;">Archive</button>
+      <div class="spacer"></div>
+      <button class="ghost-btn" id="modalCancel" type="button">Cancel</button>
+      <button class="submit" id="modalSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<script src="nav.js"></script>
+<script src="models-data.js"></script>
+<script src="emoji-data.js"></script>
+<script src="data.js"></script>
+<script src="richtext.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

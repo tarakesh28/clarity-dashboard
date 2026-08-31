@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Signal — All Habits</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,500;9..144,600;9..144,700&family=Work+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="shell" id="shell">
+
+  <aside class="sidebar" id="sidebarMount" data-active="habits"></aside>
+
+  <main class="main">
+    <div class="page-eyebrow">Every habit, at a glance</div>
+    <div class="page-head sticky-head">
+      <div class="page-title-row" style="justify-content: space-between; align-items: center;">
+        <h1 class="page-title">All Habits</h1>
+        <div class="habits-page-actions" id="habitsPageActions">
+          <button class="ghost-btn" id="habitsSelectBtn" type="button">Select</button>
+          <button class="ghost-btn" id="habitsAddBtn" type="button" title="Add a habit">+</button>
+        </div>
+        <div class="habits-mass-bar" id="habitsMassBar" style="display:none;">
+          <button class="ghost-btn" id="massToggleArchiveBtn" type="button">Archive selected</button>
+          <button class="ghost-btn danger-ghost" id="massDeleteBtn" type="button">Delete selected</button>
+          <button class="ghost-btn" id="massCancelBtn" type="button">Cancel</button>
+        </div>
+      </div>
+    </div>
+    <p class="page-desc">In the order you added them. Click one to log a day, edit it, or see its month/year view.</p>
+
+    <div class="habits-list" id="habitsList"></div>
+
+    <button class="archived-habits-toggle" id="archivedHabitsToggle" type="button" style="display:none;">
+      <span class="sc-arrow" id="archivedHabitsArrow">▸</span> Archived habits <span class="archive-count" id="archivedHabitsCount"></span>
+    </button>
+    <div class="archived-habits-list" id="archivedHabitsList" style="display:none;"></div>
+  </main>
+</div>
+
+<!-- add-habit popup (mirrors the Today page's inline add-habit form) -->
+<div class="modal-overlay habit-add-modal" id="addHabitOverlay" style="display:none;">
+  <div class="modal">
+    <h3>New habit</h3>
+    <form class="habit-add" id="popupAddHabitForm">
+      <div class="field field-full">
+        <span class="field-hint">Name</span>
+        <input type="text" class="name-input" id="popupHabitName" placeholder="New habit" required style="width:100%;">
+      </div>
+      <div class="field icon-field">
+        <span class="field-hint">Icon</span>
+        <input type="text" id="popupHabitIcon" placeholder="●" maxlength="3">
+        <button type="button" class="icon-hint-btn" id="popupHabitIconHintBtn" title="Pick an emoji">☺</button>
+        <div class="emoji-popup" id="popupHabitIconPopup" style="display:none;"></div>
+      </div>
+      <div class="field field-full">
+        <span class="field-hint">Color</span>
+        <div class="color-picker" id="popupHabitColorPicker"></div>
+      </div>
+      <div class="field field-full">
+        <span class="field-hint">Metric (optional)</span>
+        <input type="text" class="name-input" id="popupHabitMetric" placeholder="e.g. 10 pushups" style="width:100%;">
+      </div>
+    </form>
+    <div class="modal-actions">
+      <div class="spacer"></div>
+      <button class="ghost-btn" id="popupHabitCancelBtn" type="button">Cancel</button>
+      <button class="submit" id="popupHabitSaveBtn" type="button">Add habit</button>
+    </div>
+  </div>
+</div>
+
+<script src="nav.js"></script>
+<script src="emoji-data.js"></script>
+<script src="data.js"></script>
+<script src="habits-list.js"></script>
+</body>
+</html>

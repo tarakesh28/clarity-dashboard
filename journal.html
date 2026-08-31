@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Signal — Journal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,500;9..144,600;9..144,700&family=Work+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="shell" id="shell">
+
+  <aside class="sidebar" id="sidebarMount" data-active="notes"></aside>
+
+  <main class="main">
+    <div class="page-eyebrow">Every day, briefly</div>
+    <div class="page-head sticky-head">
+      <h1 class="page-title">Journal</h1>
+    </div>
+    <p class="page-desc">Every note you've written on the Today page, most recent first.</p>
+
+    <div class="journal-grid" id="journalGrid"></div>
+  </main>
+</div>
+
+<script src="nav.js"></script>
+<script src="data.js"></script>
+<script src="richtext.js"></script>
+<script src="journal.js"></script>
+</body>
+</html>

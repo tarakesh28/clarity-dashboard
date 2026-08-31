@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Signal — Mental Model</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,500;9..144,600;9..144,700&family=Work+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="shell" id="shell">
+
+  <aside class="sidebar" id="sidebarMount" data-active="models"></aside>
+
+  <main class="main">
+    <div class="page-head">
+      <a href="models.html" class="ghost-btn" style="display:inline-flex; margin-bottom:18px;">← All mental models</a>
+    </div>
+
+    <div class="model-detail-hero" id="modelHero">
+      <!-- filled by script -->
+    </div>
+
+    <div class="model-detail-actions" id="modelActions"></div>
+
+    <h2 class="block-title" style="margin: 32px 0 14px;">Your notes</h2>
+    <form class="note-form" id="noteForm">
+      <textarea id="noteText" placeholder="Type or paste a thought, an application, a counter-example — anything you want attached to this model…"></textarea>
+      <button type="submit">Save note</button>
+    </form>
+
+    <div id="noteList"></div>
+  </main>
+</div>
+
+<script src="nav.js"></script>
+<script src="models-data.js"></script>
+<script src="data.js"></script>
+<script>
+  function escapeHtml(str) {
+    return String(str).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+  function fmtTimestamp(ts) {
+    const d = new Date(ts);
+    return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) + ' · ' +
+           d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  }
+
+  const params = new URLSearchParams(location.search);
+  const slug = params.get('slug');
+  let model = Data.getModel(slug);
+  const hero = document.getElementById('modelHero');
+
+  if (!model) {
+    hero.innerHTML = `<div style="grid-column:1/-1;"><p class="page-desc">Couldn't find that model — it may have been deleted. <a href="models.html" style="color:var(--gold)">Back to all models →</a></p></div>`;
+  } else {
+    document.title = 'Signal — ' + model.title;
+
+    function openLightbox() {
+      const overlay = document.createElement('div');
+      overlay.className = 'lightbox-overlay';
+      overlay.innerHTML = `<img src="${model.img}" alt="${escapeHtml(model.title)}">`;
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+      document.addEventListener('keydown', function onEsc(e) { if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', onEsc); } });
+      document.body.appendChild(overlay);
+    }
+
+    function renderHero() {
+      hero.innerHTML = `
+        <div class="frame" id="modelHeroFrame" title="Click to zoom"><img src="${model.img}" alt="${escapeHtml(model.title)}"></div>
+        <div>
+          <h1>${escapeHtml(model.title)}</h1>
+          <p>${escapeHtml(model.caption)}</p>
+        </div>
+      `;
+      document.getElementById('modelHeroFrame').addEventListener('click', openLightbox);
+    }
+
+    function renderActions() {
+      const box = document.getElementById('modelActions');
+      box.innerHTML = `
+        <button class="pin-toggle${model.pinned ? ' pinned' : ''}" id="pinToggleBtn">${model.pinned ? '📌 Pinned — click to unpin' : '📌 Pin to Today'}</button>
+        <button class="danger" id="deleteModelBtn">Delete model</button>
+      `;
+      document.getElementById('pinToggleBtn').addEventListener('click', () => {
+        const ok = Data.setModelPinned(slug, !model.pinned);
+        if (!ok) { alert('Only 2 models can be pinned at once — unpin one first.'); return; }
+        model = Data.getModel(slug);
+        renderActions();
+      });
+      document.getElementById('deleteModelBtn').addEventListener('click', () => {
+        if (confirm(`Delete "${model.title}" and all its notes? This can't be undone (unless you restore a backup).`)) {
+          Data.deleteModel(slug);
+          location.href = 'models.html';
+        }
+      });
+    }
+
+    function renderNotes() {
+      const notes = Data.getModelNotes(slug);
+      const box = document.getElementById('noteList');
+      if (notes.length === 0) {
+        box.innerHTML = '<div class="empty-note">Nothing added yet — capture the first thing this model makes you think of.</div>';
+        return;
+      }
+      box.innerHTML = notes.map(n => `
+        <div class="note-item" data-id="${n.id}">
+          <div class="note-meta">
+            <span class="note-date">${fmtTimestamp(n.createdAt)}</span>
+            <button class="note-del" data-id="${n.id}" title="Delete note">×</button>
+          </div>
+          <p>${escapeHtml(n.text)}</p>
+        </div>
+      `).join('');
+      box.querySelectorAll('.note-del').forEach(btn => {
+        btn.addEventListener('click', () => {
+          if (confirm('Delete this note?')) {
+            Data.deleteModelNote(slug, btn.dataset.id);
+            renderNotes();
+          }
+        });
+      });
+    }
+
+    document.getElementById('noteForm').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const ta = document.getElementById('noteText');
+      const text = ta.value.trim();
+      if (!text) return;
+      Data.addModelNote(slug, text);
+      ta.value = '';
+      renderNotes();
+    });
+
+    renderHero();
+    renderActions();
+    renderNotes();
+  }
+</script>
+</body>
+</html>
