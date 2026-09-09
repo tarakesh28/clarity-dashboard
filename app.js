@@ -32,14 +32,15 @@ const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const TASK_COLORS = ['#D4A24C', '#7A8B6F', '#B5502D', '#6E8FB0', '#B07AA8'];
 
-function friendlyDate(dateStr) {
+function friendlyDate(dateStr, abbreviateOnMobile) {
   const d = parseDateStr(dateStr);
   const today = todayStr();
   const y = addDays(today, -1), t = addDays(today, 1);
+  const mobile = abbreviateOnMobile && window.matchMedia('(max-width: 760px)').matches;
   let prefix = '';
   if (dateStr === today) prefix = 'Today · ';
-  else if (dateStr === y) prefix = 'Yesterday · ';
-  else if (dateStr === t) prefix = 'Tomorrow · ';
+  else if (dateStr === y) prefix = (mobile ? 'Yest' : 'Yesterday') + ' · ';
+  else if (dateStr === t) prefix = (mobile ? 'Tom' : 'Tomorrow') + ' · ';
   return prefix + DOW[d.getDay()] + ', ' + d.getDate() + ' ' + MONTHS[d.getMonth()].slice(0, 3) + ' ' + d.getFullYear();
 }
 function formatLongDate(dateStr) {
@@ -50,25 +51,38 @@ function formatLongDate(dateStr) {
 // ---------- shared widgets ----------
 function buildColorPicker(container, initialColor, onChange) {
   let selected = initialColor;
-  function draw() {
-    container.innerHTML = '';
-    Data.HABIT_COLOR_PALETTE.forEach(c => {
-      const sw = document.createElement('div');
-      sw.className = 'color-swatch' + (c === selected ? ' selected' : '');
-      sw.style.background = c;
-      sw.addEventListener('click', () => { selected = c; draw(); onChange(selected); });
-      container.appendChild(sw);
-    });
-    const custom = document.createElement('input');
-    custom.type = 'color';
-    custom.className = 'color-native';
-    custom.value = selected.startsWith('#') ? selected : '#D4A24C';
-    custom.title = 'Custom color';
-    custom.addEventListener('input', () => { selected = custom.value; onChange(selected); draw(); });
-    container.appendChild(custom);
-  }
-  draw();
-  return { get: () => selected, set: (c) => { selected = c; draw(); } };
+  container.innerHTML = '';
+  const swatches = [];
+  Data.HABIT_COLOR_PALETTE.forEach(c => {
+    const sw = document.createElement('div');
+    sw.className = 'color-swatch';
+    sw.style.background = c;
+    sw.addEventListener('click', () => { selected = c; custom.value = c; syncSelected(); onChange(selected); });
+    swatches.push({ el: sw, color: c });
+    container.appendChild(sw);
+  });
+  const custom = document.createElement('input');
+  custom.type = 'color';
+  custom.className = 'color-native';
+  custom.value = selected && selected.startsWith('#') ? selected : '#D4A24C';
+  custom.title = 'Custom color';
+  // Real bug found (was also happening on desktop, not just mobile): this used to call draw()
+  // right here, which wipes and rebuilds the whole container — including this very
+  // <input type=color> node — on every 'input' event. A native color panel fires 'input'
+  // continuously while the finger/cursor is still down inside it, not just once on release, so
+  // recreating the input mid-drag was destroying the exact element the browser's color panel was
+  // anchored to, which is what closed it instantly instead of letting you keep browsing colors.
+  // Now 'input' only updates state and toggles a class on the existing preset swatches — nothing
+  // in the DOM is torn down while the picker is open, so it stays open through the whole drag;
+  // only the browser's own eventual close (on release) ends it, same as any other page.
+  custom.addEventListener('input', () => { selected = custom.value; syncSelected(); onChange(selected); });
+  container.appendChild(custom);
+  function syncSelected() { swatches.forEach(({ el, color }) => el.classList.toggle('selected', color === selected)); }
+  syncSelected();
+  return {
+    get: () => selected,
+    set: (c) => { selected = c; if (c && c.startsWith('#')) custom.value = c; syncSelected(); }
+  };
 }
 
 function buildTaskColorPicker(container, initialColor) {
@@ -143,7 +157,20 @@ function wireEmojiPicker(triggerEl, inputEl, popupEl) {
 function wireDurUnit(valueId, unitId) {
   const unitSel = document.getElementById(unitId);
   const valInput = document.getElementById(valueId);
-  function apply() { valInput.step = 1; valInput.min = 0; }
+  function apply() {
+    // Real bug found: the inline Today-page add-task form is a genuine <form> (#addEntryForm),
+    // so submitting it runs the browser's own native constraint validation first — which,
+    // with step=0.25, treats anything that isn't an exact quarter-hour (1.37, etc) as invalid
+    // and blocks the submit with its own "please enter a valid value" bubble before this file's
+    // JS ever runs. The edit-task modal isn't a <form> at all (plain buttons/divs), so it never
+    // goes through native validation and silently accepted any typed decimal — which is actually
+    // the behavior wanted here too. step="any" tells the browser exactly that: any decimal is a
+    // valid hour value, no snapping, matching the modal. (Minutes stay whole-number steps — this
+    // is only for hour mode.) iOS's on-screen keypad shows a decimal-point key for any step
+    // that isn't a whole integer, "any" included, so that part of the earlier fix still holds.
+    valInput.step = unitSel.value === 'hour' ? 'any' : 1;
+    valInput.min = 0;
+  }
   unitSel.addEventListener('change', apply);
   apply();
 }
@@ -213,14 +240,15 @@ let tasksCollapsed = localStorage.getItem('mm_tasksCollapsed') === '1';
 let chronoCollapsed = localStorage.getItem('mm_chronoCollapsed') === '1';
 
 function renderDayNav() {
-  document.getElementById('currentDateLabel').textContent = friendlyDate(currentDate);
+  document.getElementById('currentDateLabel').textContent = friendlyDate(currentDate, true);
 }
 function refreshDay() {
-  // re-run the recurring-task top-up and rough-task rollover on every refresh (not just page
-  // load) — closes the gap where a task could go missing after navigating around and only
-  // reappear on an actual browser refresh.
+  // Re-run the recurring-task top-up on every refresh (not just page load) — closes the gap
+  // where a series' next occurrence could go missing after navigating around and only reappear
+  // on an actual browser refresh. The rough-task rollover that used to run alongside this has
+  // been removed entirely (see data.js) — it was relocating unfinished tasks onto today instead
+  // of leaving them on their own day, which is exactly the bug that was reported.
   Data.ensureSeriesTopUp();
-  Data.rolloverUnfinishedRoughTasks();
   renderDayEntries();
   renderDayGrid();
   renderArchiveSection();
@@ -243,9 +271,26 @@ function updateTaskMassToggleBtn() {
   btn.dataset.targetArchived = firstIsArchived ? '0' : '1';
 }
 function updateTaskSelectModeUI() {
-  document.getElementById('taskDateNavGroup').style.display = taskSelectMode ? 'none' : 'flex';
+  // Date-nav stays visible now (see .nav-disabled) instead of disappearing outright — just
+  // muted + non-interactive while there's nothing there to do with a row selection anyway.
+  document.getElementById('taskDateNavGroup').classList.toggle('nav-disabled', taskSelectMode);
+  // Take Action pill: muted in place (same .nav-disabled treatment) rather than hidden, per
+  // request — now that Cancel's own positioning is solid on both mobile and desktop (see
+  // styles.css), there's no longer a crowding reason to remove it from the row entirely.
+  document.getElementById('flowShortcutBtn').classList.toggle('nav-disabled', taskSelectMode);
   document.getElementById('taskNavActions').style.display = taskSelectMode ? 'none' : 'flex';
-  document.getElementById('taskMassBar').style.display = taskSelectMode ? 'flex' : 'none';
+  // Class toggle, not inline style.display — mobile needs the mass bar's children to escape into
+  // #taskToolsRow's own grid (via display:contents once .mass-bar-open is on, see styles.css) so
+  // the 3 real actions can span the row's full width below Cancel/Take Action, instead of being
+  // squeezed into a narrow column next to Take Action's full, un-shrunk label. An inline style
+  // here would out-specificity that CSS regardless of viewport.
+  document.getElementById('taskMassBar').classList.toggle('mass-bar-open', taskSelectMode);
+  // Adding a new task while picking existing ones for a bulk action doesn't make sense — block
+  // the whole add-form (inputs included, not just the Add button) the same muted+inert way the
+  // date-nav and Take Action pill already are above.
+  const addForm = document.getElementById('addEntryForm');
+  addForm.classList.toggle('nav-disabled', taskSelectMode);
+  if (taskSelectMode && addForm.contains(document.activeElement)) document.activeElement.blur();
   if (!taskSelectMode) { taskSelectedIds.clear(); }
   else { archiveOpen = true; } // so archived tasks are visible (and selectable) as soon as Select is on
   updateTaskMassToggleBtn();
@@ -283,9 +328,9 @@ document.getElementById('taskMassToggleArchiveBtn').addEventListener('click', (e
   exitTaskSelectMode();
   refreshDay();
 });
-document.getElementById('taskMassDeleteBtn').addEventListener('click', () => {
+document.getElementById('taskMassDeleteBtn').addEventListener('click', async () => {
   if (taskSelectedIds.size === 0) { alert('Select at least one task first.'); return; }
-  if (!confirm(`Remove ${taskSelectedIds.size} task(s)? Ones picked from the Archive are just cleared from Archive — they still exist on their own day. Ones picked from today's list are fully deleted, same as their own × button.`)) return;
+  if (!await SignalConfirm(`Remove ${taskSelectedIds.size} task(s)? Ones picked from the Archive are just cleared from Archive — they still exist on their own day. Ones picked from today's list are fully deleted, same as their own × button.`, { okLabel: 'Remove', danger: true })) return;
   const archivedIds = new Set(Data.getArchivedDayEntries().map(e => e.id));
   taskSelectedIds.forEach(id => {
     if (archivedIds.has(id)) Data.dismissDayEntryFromArchive(id); else Data.deleteDayEntry(id);
@@ -359,10 +404,10 @@ function renderEntryRow(e) {
       sendEntryToFlow(e.id);
     });
   }
-  row.querySelector('.entry-del-x').addEventListener('click', (ev) => {
+  row.querySelector('.entry-del-x').addEventListener('click', async (ev) => {
     ev.stopPropagation();
     const warn = e.repeatDaily ? 'Delete this task? Only this day is removed — the rest of the repeat series is untouched.' : 'Delete this task?';
-    if (confirm(warn)) { Data.deleteDayEntry(e.id); refreshDay(); }
+    if (await SignalConfirm(warn, { okLabel: 'Delete', danger: true })) { Data.deleteDayEntry(e.id); refreshDay(); }
   });
   const priorityInput = row.querySelector('.entry-priority-input');
   if (priorityInput) {
@@ -458,25 +503,28 @@ function renderArchiveSection() {
     return;
   }
 
+  // No "mark done" checkbox here on purpose — an archived task isn't an active item to log
+  // progress against; the only actions on it are "go look at its day" (the date, now clickable
+  // — jumps Day List's own date-nav there so its actual siblings for that day show up), restore
+  // it back to today, or remove it from this Archive view (soft — see the × title/Data layer).
   listEl.innerHTML = archived.map(e => `
     <div class="archive-row" data-id="${e.id}">
-      <button class="entry-check" data-id="${e.id}" title="Mark done"></button>
-      <span class="ar-date">${ddmmyyyyShort(e.date)}</span>
+      <button class="ar-date" type="button" data-date="${e.date}" title="Go to ${ddmmyyyyShort(e.date)}">${ddmmyyyyShort(e.date)}</button>
       <span class="ar-text">${escapeHtml(e.text)}</span>
       <button class="ar-restore" type="button" data-id="${e.id}">Restore to today</button>
       <button class="entry-del-x" title="Remove from Archive (it stays on its own day — delete it fully from there)">×</button>
     </div>
   `).join('');
-  listEl.querySelectorAll('.entry-check').forEach(btn => {
-    btn.addEventListener('click', () => { Data.updateDayEntry(btn.dataset.id, { done: true }); refreshDay(); });
+  listEl.querySelectorAll('.ar-date').forEach(btn => {
+    btn.addEventListener('click', () => goToDate(btn.dataset.date));
   });
   listEl.querySelectorAll('.ar-restore').forEach(btn => {
     btn.addEventListener('click', () => { Data.restoreDayEntryToToday(btn.dataset.id); refreshDay(); });
   });
   listEl.querySelectorAll('.entry-del-x').forEach(btn => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', async () => {
       const row = btn.closest('.archive-row');
-      if (confirm("Remove this from Archive? It's not deleted — it still exists on its own day. To fully delete it, go to that day and delete it there.")) { Data.dismissDayEntryFromArchive(row.dataset.id); refreshDay(); }
+      if (await SignalConfirm("Remove this from Archive? It's not deleted — it still exists on its own day. To fully delete it, go to that day and delete it there.", { okLabel: 'Remove' })) { Data.dismissDayEntryFromArchive(row.dataset.id); refreshDay(); }
     });
   });
 }
@@ -644,10 +692,64 @@ function renderGridTasks() {
   });
 }
 
+// Shared "jump the Day List's date-nav to this exact date" helper — used by prev/next/today/the
+// open-day picker, and now also the Archive section's clickable dates (simple day-nav: land on
+// that date and show everything else that day too, not just the one archived task).
+function goToDate(dateStr) {
+  if (taskSelectMode) exitTaskSelectMode();
+  // Real bug found: fast repeated clicks on the day-nav arrows made the page visibly jump/scroll
+  // on its own. renderDayEntries()/renderDayGrid()/renderArchiveSection() below all tear down and
+  // rebuild their containers from scratch, and different dates can have very different amounts
+  // of content — a short day's list is a lot shorter than a busy one. Rebuilding a shorter list
+  // while the page is scrolled down past where its new (shorter) height ends leaves nothing there
+  // to scroll to anymore, so the browser snaps the page back up on its own — which reads as a
+  // random jump, and gets worse the faster you click through days. renderHabitToday() already
+  // guards against exactly this for its own re-renders; goToDate() just never had the same guard
+  // for its own page-level scroll position.
+  const scrollY = window.scrollY;
+  currentDate = dateStr;
+  renderDayNav(); refreshDay(); scrollGridToAnchor();
+  window.requestAnimationFrame(() => window.scrollTo(0, scrollY));
+}
+
+// Shared "actually open a hidden native <input type=date>'s picker" helper. These date inputs
+// are deliberately kept visually invisible (see .open-day-picker in styles.css) since only their
+// own small 📅 button should trigger them, never the input itself directly.
+// Real root cause of "confirmed working on desktop, never once on iPhone" finally tracked down —
+// it's not a bug in this code at all, it's an open, unresolved WebKit bug (bugs.webkit.org/
+// show_bug.cgi?id=261703). Per a WebKit engineer directly on that thread: showPicker() simply
+// isn't implemented for date inputs on iOS Safari at all — calling it doesn't throw, it just
+// silently does nothing ("Nothing will happen," their own words, not an exception). That's
+// exactly why the try/catch below never fell through to .click() on an iPhone: nothing ever
+// throws there for it to catch. Desktop Safari, Chrome, and Firefox all implement showPicker()
+// properly, which is why this looked "fixed" the moment it was checked on a laptop. iOS needs to
+// skip showPicker() entirely and go straight to .click() — which, per that same WebKit thread,
+// is effectively what showPicker() would have to be anyway on iOS ("a wrapper around focus(),
+// since native iOS pickers are tied to element focus"), so this isn't a downgrade there, just
+// skipping a broken middle step. Detecting "iOS" instead of retesting the (currently working)
+// desktop path with feature-detection alone, since the standard `typeof showPicker === 'function'`
+// check reports true on iOS too — the method exists there, it's just a no-op for this input type.
+function openDatePicker(picker) {
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+  if (!isIOS && typeof picker.showPicker === 'function') {
+    try { picker.showPicker(); return; } catch (err) { /* fall through to .click() below */ }
+  }
+  picker.click();
+}
+
 document.getElementById('flowShortcutBtn').addEventListener('click', () => { window.location.href = 'flow.html'; });
-document.getElementById('dayPrev').addEventListener('click', () => { if (taskSelectMode) exitTaskSelectMode(); currentDate = addDays(currentDate, -1); renderDayNav(); refreshDay(); scrollGridToAnchor(); });
-document.getElementById('dayNext').addEventListener('click', () => { if (taskSelectMode) exitTaskSelectMode(); currentDate = addDays(currentDate, 1); renderDayNav(); refreshDay(); scrollGridToAnchor(); });
-document.getElementById('dayToday').addEventListener('click', () => { if (taskSelectMode) exitTaskSelectMode(); currentDate = todayStr(); renderDayNav(); refreshDay(); scrollGridToAnchor(); });
+document.getElementById('dayPrev').addEventListener('click', () => goToDate(addDays(currentDate, -1)));
+document.getElementById('dayNext').addEventListener('click', () => goToDate(addDays(currentDate, 1)));
+document.getElementById('dayToday').addEventListener('click', () => goToDate(todayStr()));
+document.getElementById('dayOpenBtn').addEventListener('click', () => {
+  const picker = document.getElementById('dayOpenPicker');
+  picker.value = currentDate;
+  openDatePicker(picker);
+});
+document.getElementById('dayOpenPicker').addEventListener('change', (e) => {
+  if (!e.target.value) return;
+  goToDate(e.target.value);
+});
 
 document.getElementById('daySearchToggleBtn').addEventListener('click', () => {
   const wrap = document.getElementById('daySearchWrap');
@@ -732,11 +834,11 @@ document.getElementById('modalSave').addEventListener('click', () => {
   closeEntryModal();
   refreshDay();
 });
-document.getElementById('modalDelete').addEventListener('click', () => {
+document.getElementById('modalDelete').addEventListener('click', async () => {
   if (!editingEntryId) return;
   const entry = Data.getDayEntries().find(e => e.id === editingEntryId);
   const warn = entry && entry.repeatDaily ? 'Delete this task? Only this day is removed — the rest of the repeat series is untouched.' : 'Delete this task?';
-  if (confirm(warn)) { Data.deleteDayEntry(editingEntryId); closeEntryModal(); refreshDay(); }
+  if (await SignalConfirm(warn, { okLabel: 'Delete', danger: true })) { Data.deleteDayEntry(editingEntryId); closeEntryModal(); refreshDay(); }
 });
 document.getElementById('modalArchive').addEventListener('click', () => {
   if (!editingEntryId) return;
@@ -772,11 +874,18 @@ let addHabitColorCtrl;
 let habitLogDate = todayStr();
 
 function renderHabitDayNav() {
-  document.getElementById('habitDateLabel').textContent = friendlyDate(habitLogDate);
+  document.getElementById('habitDateLabel').textContent = friendlyDate(habitLogDate, true);
   const nextBtn = document.getElementById('habitNext');
   const atToday = habitLogDate >= todayStr();
   nextBtn.disabled = atToday;
   nextBtn.classList.toggle('next-disabled', atToday);
+  document.getElementById('habitOpenPicker').max = todayStr(); // habit tracker doesn't allow
+  // viewing future days — matches habitNext's own limit. Set here (whenever the nav re-renders)
+  // rather than inside the open-picker click handler itself — setting an attribute on the input
+  // in the same synchronous handler as calling showPicker() on it is a plausible source of the
+  // "picker doesn't open on iOS" report (Day List's equivalent button, which has no such
+  // attribute to set, was never reported broken), so the handler below now only sets .value and
+  // calls showPicker(), matching that already-working pattern exactly.
 }
 document.getElementById('habitPrev').addEventListener('click', () => { habitLogDate = addDays(habitLogDate, -1); renderHabitDayNav(); renderHabitToday(); });
 document.getElementById('habitNext').addEventListener('click', () => {
@@ -784,6 +893,16 @@ document.getElementById('habitNext').addEventListener('click', () => {
   habitLogDate = addDays(habitLogDate, 1); renderHabitDayNav(); renderHabitToday();
 });
 document.getElementById('habitToday').addEventListener('click', () => { habitLogDate = todayStr(); renderHabitDayNav(); renderHabitToday(); });
+document.getElementById('habitOpenBtn').addEventListener('click', () => {
+  const picker = document.getElementById('habitOpenPicker');
+  picker.value = habitLogDate;
+  openDatePicker(picker);
+});
+document.getElementById('habitOpenPicker').addEventListener('change', (e) => {
+  if (!e.target.value) return;
+  habitLogDate = e.target.value > todayStr() ? todayStr() : e.target.value;
+  renderHabitDayNav(); renderHabitToday();
+});
 
 document.getElementById('habitSearchToggleBtn').addEventListener('click', () => {
   const wrap = document.getElementById('habitSearchWrap');
@@ -813,12 +932,22 @@ document.getElementById('habitCancelBtn').addEventListener('click', hideNewHabit
 let habitTodaySelectMode = false;
 let habitTodaySelectedIds = new Set();
 function updateHabitTodaySelectModeUI() {
-  document.getElementById('habitDateNavGroup').style.display = habitTodaySelectMode ? 'none' : 'flex';
+  // Same "mute + disable in place, don't hide" treatment as the Day List's date-nav above.
+  document.getElementById('habitDateNavGroup').classList.toggle('nav-disabled', habitTodaySelectMode);
   document.getElementById('habitNavActions').style.display = habitTodaySelectMode ? 'none' : 'flex';
-  document.getElementById('habitTodayMassBar').style.display = habitTodaySelectMode ? 'flex' : 'none';
+  // Class toggle, not inline style.display: desktop needs this to become `display:contents`
+  // (freeing Cancel/the actions row to join #habitDayNavRow's own grid directly — see styles.css)
+  // while mobile still wants a real `display:flex` on this element itself. An inline style here
+  // would out-specificity either CSS rule regardless of viewport, so the show/hide *and* the
+  // display-mode-per-breakpoint both live in styles.css now instead.
+  document.getElementById('habitTodayMassBar').classList.toggle('mass-bar-open', habitTodaySelectMode);
+  // Adding a new habit while picking existing ones for a bulk action doesn't make sense either —
+  // same muted+inert block as the add-task form above.
+  document.getElementById('newHabitBtn').classList.toggle('nav-disabled', habitTodaySelectMode);
   if (!habitTodaySelectMode) habitTodaySelectedIds.clear();
 }
 document.getElementById('habitSelectBtn').addEventListener('click', () => {
+  hideNewHabitForm(); // in case the add-habit form was open — don't let both be active together
   habitTodaySelectMode = true;
   updateHabitTodaySelectModeUI();
   renderHabitToday();
@@ -836,23 +965,25 @@ document.getElementById('habitTodayMassDoneBtn').addEventListener('click', () =>
   renderHabitToday();
   if (document.getElementById('habitCalendarView').style.display !== 'none') renderCalendar();
 });
-document.getElementById('habitTodayMassArchiveBtn').addEventListener('click', () => {
+document.getElementById('habitTodayMassArchiveBtn').addEventListener('click', async () => {
   if (habitTodaySelectedIds.size === 0) { alert('Select at least one habit first.'); return; }
-  if (!confirm(`Move ${habitTodaySelectedIds.size} habit(s) to archive? Nothing is deleted — restore them any time from the All Habits page.`)) return;
+  if (!await SignalConfirm(`Move ${habitTodaySelectedIds.size} habit(s) to archive? Nothing is deleted — restore them any time from the All Habits page.`, { okLabel: 'Archive' })) return;
   habitTodaySelectedIds.forEach(id => Data.updateHabit(id, { archived: true }));
   habitTodaySelectMode = false;
   updateHabitTodaySelectModeUI();
   renderHabitToday();
   renderCalLegend();
+  if (document.getElementById('habitCalendarView').style.display !== 'none') renderCalendar();
 });
-document.getElementById('habitTodayMassDeleteBtn').addEventListener('click', () => {
+document.getElementById('habitTodayMassDeleteBtn').addEventListener('click', async () => {
   if (habitTodaySelectedIds.size === 0) { alert('Select at least one habit first.'); return; }
-  if (!confirm(`Delete ${habitTodaySelectedIds.size} habit(s) and all their history? This can't be undone (unless you restore a backup).`)) return;
+  if (!await SignalConfirm(`Delete ${habitTodaySelectedIds.size} habit(s) and all their history? This can't be undone (unless you restore a backup).`, { okLabel: 'Delete', danger: true })) return;
   habitTodaySelectedIds.forEach(id => Data.deleteHabit(id));
   habitTodaySelectMode = false;
   updateHabitTodaySelectModeUI();
   renderHabitToday();
   renderCalLegend();
+  if (document.getElementById('habitCalendarView').style.display !== 'none') renderCalendar();
 });
 
 function renderHabitToday() {
@@ -887,14 +1018,22 @@ function renderHabitToday() {
       row.classList.add('habit-row-ghost');
       row.innerHTML = `
         <span class="habit-icon-badge" style="background:${h.color}22;border-color:${h.color}">${escapeHtml(h.icon || '●')}</span>
-        <span class="habit-name">${escapeHtml(h.name)} <span class="ghost-tag">deleted</span></span>
+        <span class="habit-name habit-ghost-name" title="Permanently delete this habit and all its history">${escapeHtml(h.name)} <span class="ghost-tag">deleted</span></span>
         <span class="ghost-note">${escapeHtml((log && log.note) || '')}${log && log.metricValue != null && log.metricValue !== '' ? ` · ${escapeHtml(String(log.metricValue))}` : ''}</span>
         <span class="ghost-done">${done ? '✓' : ''}</span>
         <button class="entry-del-x" title="Remove this day's record">×</button>
       `;
-      row.querySelector('.entry-del-x').addEventListener('click', (ev) => {
+      row.querySelector('.habit-ghost-name').addEventListener('click', async (ev) => {
         ev.stopPropagation();
-        if (confirm(`Remove ${h.name}'s record for this day? (The habit itself is already deleted — this just clears this one day.)`)) {
+        if (await SignalConfirm(`Delete "${h.name}" from all records permanently? This removes the habit and every logged day it has, everywhere — not just this one day. Can't be undone (unless you restore a backup).`, { okLabel: 'Delete permanently', danger: true })) {
+          Data.hardDeleteHabit(h.id);
+          renderHabitToday();
+          if (document.getElementById('habitCalendarView').style.display !== 'none') renderCalendar();
+        }
+      });
+      row.querySelector('.entry-del-x').addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        if (await SignalConfirm(`Remove ${h.name}'s record for this day? (The habit itself is already deleted — this just clears this one day.)`, { okLabel: 'Remove' })) {
           Data.deleteHabitLog(h.id, habitLogDate);
           renderHabitToday();
         }
@@ -905,6 +1044,7 @@ function renderHabitToday() {
 
     if (habitTodaySelectMode) {
       const checked = habitTodaySelectedIds.has(h.id);
+      row.classList.add('habit-row-select');
       row.innerHTML = `
         <input type="checkbox" class="habit-select-checkbox" ${checked ? 'checked' : ''} tabindex="-1">
         <span class="habit-icon-badge" style="background:${h.color}22;border-color:${h.color}">${escapeHtml(h.icon || '●')}</span>
@@ -919,11 +1059,17 @@ function renderHabitToday() {
     }
 
     row.draggable = true;
+    // Mobile shows this plain-text mirror of the metric value under the habit name instead of
+    // the full interactive .metric-cell (see styles.css) — desktop keeps the real control below.
+    const metricMini = (log && log.metric) || h.metric || '';
     row.innerHTML = `
       <span class="entry-drag-handle" title="Drag to reorder">⠿</span>
       <a class="habit-identity" href="habit.html?id=${h.id}" title="View / edit ${escapeHtml(h.name)}">
         <span class="habit-icon-badge" style="background:${h.color}22;border-color:${h.color}">${escapeHtml(h.icon || '●')}</span>
-        <span class="habit-name">${escapeHtml(h.name)}</span>
+        <span class="habit-identity-text">
+          <span class="habit-name">${escapeHtml(h.name)}</span>
+          <span class="habit-metric-mini">${escapeHtml(metricMini)}</span>
+        </span>
       </a>
       <div class="metric-cell"></div>
       <input type="text" class="habit-note-input" placeholder="note…" value="${escapeHtml((log && log.note) || '')}">
@@ -947,7 +1093,37 @@ function renderHabitToday() {
     });
     list.appendChild(row);
   });
+  fitHabitNames(list);
   window.requestAnimationFrame(() => window.scrollTo(0, scrollY));
+}
+
+// Long habit names on a phone previously just got truncated with "..." once CSS Grid gave the
+// name column a real (non-fixed) width to work with — better than clipping mid-letter, but still
+// loses real information for anything past a word or two. This measures each rendered name
+// against the space it actually has and, in order: (1) leaves it alone if it already fits, (2)
+// shrinks font-size in small steps if it doesn't, down to a floor before the text gets too small
+// to read comfortably, (3) only if it *still* doesn't fit at that floor AND the name has more
+// than one word, lets it wrap onto a second line instead of continuing to shrink or truncate —
+// .habit-metric-mini sits below the name in the same column regardless, so it just moves down
+// with it. Desktop's fixed-width identity column + ellipsis is untouched (this is scoped to the
+// same mobile width where the CSS Grid identity column — see styles.css — replaces it).
+const HABIT_NAME_BASE_FONT = 13.5; // px — must match .habit-name's own font-size in styles.css
+const HABIT_NAME_MIN_FONT = 11.5;  // px — floor before falling back to a second line instead
+function fitHabitNames(container) {
+  if (!window.matchMedia('(max-width: 760px)').matches) return;
+  container.querySelectorAll('.habit-name').forEach(nameEl => {
+    nameEl.style.fontSize = '';
+    nameEl.classList.remove('habit-name-wrap');
+    if (nameEl.scrollWidth <= nameEl.clientWidth) return; // fits already at the base size
+    let size = HABIT_NAME_BASE_FONT;
+    while (nameEl.scrollWidth > nameEl.clientWidth && size > HABIT_NAME_MIN_FONT) {
+      size -= 0.5;
+      nameEl.style.fontSize = size + 'px';
+    }
+    if (nameEl.scrollWidth > nameEl.clientWidth && /\s/.test(nameEl.textContent.trim())) {
+      nameEl.classList.add('habit-name-wrap');
+    }
+  });
 }
 
 function getDragAfterElementGeneric(container, y, selector) {
@@ -1021,39 +1197,77 @@ document.getElementById('tabCalendar').addEventListener('click', () => {
 
 let calMonth = new Date(); calMonth.setDate(1);
 let calSelectedDate = null;
+let calShowDeleted = false;
+let calHiddenIds = new Set(); // habits toggled off in the legend — hides just their dots in the month grid, not their entry in the day-detail panel below
+
+function calHabits() {
+  // deleted habits are soft-deleted (Data.deleteHabit) — their record and logs both survive.
+  // Hidden here by default (this calendar previously silently dropped their dots/detail rows
+  // entirely, even though the underlying log data was still there); "Show deleted" reveals them.
+  return Data.getHabits().filter(h => !h.archived || (calShowDeleted && h.deleted));
+}
 
 function renderCalLegend() {
-  const habits = Data.getHabits().filter(h => !h.archived);
+  const habits = calHabits();
   const wrap = document.getElementById('calLegend');
   wrap.className = 'cal-legend big';
-  wrap.innerHTML = habits.map(h => `<span class="li"><span class="sw" style="background:${h.color}"></span>${escapeHtml(h.icon || '')} ${escapeHtml(h.name)}</span>`).join('');
+  // "(deleted)" is its own clickable span now, not just a label suffix — same permanent hard-delete
+  // confirm as the ghost row's name uses elsewhere, so a legend entry with real history behind it
+  // (which is why it's soft-deleted and showing up here at all) can still be cleared for good once
+  // you're done with it, without having to dig up a day it was logged on just to reach the ghost row.
+  wrap.innerHTML = habits.map(h => `<label class="li${h.deleted ? ' deleted' : ''}"><input type="checkbox" class="cal-legend-check" data-id="${h.id}" ${calHiddenIds.has(h.id) ? '' : 'checked'}><span class="sw" style="background:${h.color}"></span>${escapeHtml(h.icon || '')} ${escapeHtml(h.name)}${h.deleted ? ` <span class="legend-hard-del" data-id="${h.id}" title="Permanently delete this habit and all its history">(deleted)</span>` : ''}</label>`).join('');
+  wrap.querySelectorAll('.cal-legend-check').forEach(cb => {
+    cb.addEventListener('change', (e) => {
+      const id = e.target.dataset.id;
+      if (e.target.checked) calHiddenIds.delete(id); else calHiddenIds.add(id);
+      renderCalGrid(); // just the dots need to redraw — no need to rebuild the legend itself mid-click
+    });
+  });
+  wrap.querySelectorAll('.legend-hard-del').forEach(span => {
+    span.addEventListener('click', async (ev) => {
+      ev.preventDefault(); ev.stopPropagation(); // it's inside the <label> — don't let this toggle the checkbox too
+      const id = span.dataset.id;
+      const h = Data.getHabit(id);
+      if (!h) return;
+      if (await SignalConfirm(`Delete "${h.name}" from all records permanently? This removes the habit and every logged day it has, everywhere — not just this one day. Can't be undone (unless you restore a backup).`, { okLabel: 'Delete permanently', danger: true })) {
+        Data.hardDeleteHabit(id);
+        renderCalendar();
+        renderHabitToday();
+      }
+    });
+  });
 }
 function renderCalDetail(dateStr) {
-  const habits = Data.getHabits().filter(h => !h.archived);
+  const habits = calHabits();
   const logs = Data.getHabitLogs().filter(l => l.date === dateStr && (l.done || (l.note && l.note.trim())));
   const box = document.getElementById('calDetail');
   box.style.display = '';
   let html = `<h4>${friendlyDate(dateStr)}</h4>`;
-  if (logs.length === 0) { html += '<div class="empty-note">No habits logged this day.</div>'; }
+  const rows = logs.map(l => ({ l, h: habits.find(h => h.id === l.habitId) })).filter(r => r.h);
+  if (rows.length === 0) { html += '<div class="empty-note">No habits logged this day.</div>'; }
   else {
-    logs.forEach(l => {
-      const h = habits.find(h => h.id === l.habitId);
-      if (!h) return;
-      html += `<div class="item"><span class="sw" style="background:${h.color}"></span>${escapeHtml(h.icon || '')} ${escapeHtml(h.name)}${l.done ? ' ✓' : ' (noted)'}${l.metric ? ' · ' + escapeHtml(l.metric) : ''}${l.note ? ' — ' + escapeHtml(l.note) : ''}</div>`;
+    rows.forEach(({ l, h }) => {
+      html += `<div class="item${h.deleted ? ' deleted' : ''}"><span class="sw" style="background:${h.color}"></span>${escapeHtml(h.icon || '')} ${escapeHtml(h.name)}${h.deleted ? ' (deleted)' : ''}${l.done ? ' ✓' : ' (noted)'}${l.metric ? ' · ' + escapeHtml(l.metric) : ''}${l.note ? ' — ' + escapeHtml(l.note) : ''}${h.deleted ? `<button type="button" class="cal-log-del" data-habit="${h.id}" data-date="${dateStr}" title="Permanently remove this leftover log entry">×</button>` : ''}</div>`;
     });
   }
   box.innerHTML = html;
+  box.querySelectorAll('.cal-log-del').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (await SignalConfirm('Permanently remove this log entry? The habit is already deleted — this just clears its leftover record for this one day.', { okLabel: 'Remove', danger: true })) {
+        Data.deleteHabitLog(btn.dataset.habit, btn.dataset.date);
+        renderCalendar();
+      }
+    });
+  });
 }
-function renderCalendar() {
-  renderCalLegend();
-  document.getElementById('calLabel').textContent = MONTHS[calMonth.getMonth()] + ' ' + calMonth.getFullYear();
+function renderCalGrid() {
   const grid = document.getElementById('calGrid');
   grid.innerHTML = '';
   DOW.forEach(d => { const el = document.createElement('div'); el.className = 'cal-dow'; el.textContent = d[0]; grid.appendChild(el); });
   const year = calMonth.getFullYear(), month = calMonth.getMonth();
   const firstDow = new Date(year, month, 1).getDay();
   const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const habits = Data.getHabits().filter(h => !h.archived);
+  const habits = calHabits();
   const logs = Data.getHabitLogs().filter(l => l.done);
   const today = todayStr();
   for (let i = 0; i < firstDow; i++) { const el = document.createElement('div'); el.className = 'cal-cell empty'; grid.appendChild(el); }
@@ -1061,19 +1275,36 @@ function renderCalendar() {
     const dateStr = year + '-' + pad(month + 1) + '-' + pad(day);
     const cell = document.createElement('div');
     cell.className = 'cal-cell' + (dateStr === today ? ' today' : '') + (dateStr === calSelectedDate ? ' selected' : '');
-    const dayLogs = logs.filter(l => l.date === dateStr);
+    const dayLogs = logs.filter(l => l.date === dateStr && !calHiddenIds.has(l.habitId));
     const dotsHtml = dayLogs.map(l => {
       const h = habits.find(h => h.id === l.habitId);
       return h ? `<span class="d" style="background:${h.color}" title="${escapeHtml(h.name)}"></span>` : '';
     }).join('');
     cell.innerHTML = `<span class="cal-daynum">${day}</span><div class="cal-dots big">${dotsHtml}</div>`;
-    cell.addEventListener('click', () => { calSelectedDate = dateStr; renderCalendar(); });
+    cell.addEventListener('click', () => {
+      calSelectedDate = dateStr;
+      habitLogDate = dateStr; // clicking a calendar day here also moves the Today-snapshot day-nav to that date, same as the habit-detail page's own month calendar
+      renderHabitDayNav();
+      renderCalGrid();
+      renderCalDetail(dateStr);
+    });
     grid.appendChild(cell);
   }
+}
+function renderCalendar() {
+  renderCalLegend();
+  document.getElementById('calLabel').textContent = MONTHS[calMonth.getMonth()] + ' ' + calMonth.getFullYear();
+  renderCalGrid();
   if (calSelectedDate) renderCalDetail(calSelectedDate);
 }
 document.getElementById('calPrev').addEventListener('click', () => { calMonth.setMonth(calMonth.getMonth() - 1); renderCalendar(); });
 document.getElementById('calNext').addEventListener('click', () => { calMonth.setMonth(calMonth.getMonth() + 1); renderCalendar(); });
+document.getElementById('calShowDeletedBtn').addEventListener('click', (e) => {
+  calShowDeleted = !calShowDeleted;
+  e.target.classList.toggle('active', calShowDeleted);
+  e.target.textContent = calShowDeleted ? 'Hide deleted' : 'Show deleted';
+  renderCalendar();
+});
 
 function runHabitSearch() {
   const q = document.getElementById('habitSearchInput').value.trim().toLowerCase();
@@ -1117,6 +1348,17 @@ document.getElementById('habitSearchBtn').addEventListener('click', runHabitSear
 document.getElementById('habitSearchInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); runHabitSearch(); } });
 
 // ================= NOTES (Today's journal entry) =================
+// Saving on every keystroke used to run a full JSON.stringify + localStorage.setItem of the
+// whole journal array synchronously inside the 'input' handler — harmless on desktop, but a
+// real, felt lag on slower phone CPUs. Debounced here: the visible editing (autoSize, empty-
+// state handling) still happens instantly via richtext.js's own 'input' listener, only the
+// actual write is delayed until typing pauses. Flushed immediately on tab-hide/navigate-away
+// so a debounce in flight never silently loses the last few characters typed.
+let journalSaveTimer = null;
+function flushJournalSave() {
+  if (journalSaveTimer) { clearTimeout(journalSaveTimer); journalSaveTimer = null; }
+  Data.upsertJournalEntry(todayStr(), journalEditor.getHtml());
+}
 const journalEditor = initRichTextEditor(
   document.getElementById('journalTextarea'),
   document.getElementById('journalToolbar'),
@@ -1124,9 +1366,14 @@ const journalEditor = initRichTextEditor(
     capPx: 260,
     expandStorageKey: 'mm_journalExpanded',
     expandBtnEl: document.getElementById('journalExpandBtn'),
-    onInput: () => { Data.upsertJournalEntry(todayStr(), journalEditor.getHtml()); }
+    onInput: () => {
+      if (journalSaveTimer) clearTimeout(journalSaveTimer);
+      journalSaveTimer = setTimeout(flushJournalSave, 400);
+    }
   }
 );
+window.addEventListener('pagehide', () => { if (journalSaveTimer) flushJournalSave(); });
+document.addEventListener('visibilitychange', () => { if (document.hidden && journalSaveTimer) flushJournalSave(); });
 function loadJournalToday() {
   const entry = Data.getJournalEntry(todayStr());
   journalEditor.setHtml(entry ? normalizeStoredHtml(entry.text) : '');
@@ -1150,7 +1397,6 @@ function renderSideRail() {
 
 // ---------- init ----------
 Data.ensureSeriesTopUp();
-Data.rolloverUnfinishedRoughTasks();
 document.getElementById('todayLongDate').textContent = formatLongDate(todayStr());
 renderHomeModels();
 renderDayNav();
@@ -1173,6 +1419,25 @@ entryColorCtrl = buildTaskColorPicker(document.getElementById('entryColorPicker'
 modalColorCtrl = buildTaskColorPicker(document.getElementById('modalColorPicker'), TASK_COLORS[0]);
 entryAmpmCtrl = wireAmpmToggle('entryTime', 'entryAmpmToggle');
 modalAmpmCtrl = wireAmpmToggle('modalTime', 'modalAmpmToggle');
+// Real bug found: "deleted habit still showing, only clicking Select makes it go away" — this is
+// the browser's back-forward cache (bfcache). Navigating to another page (e.g. deleting a habit
+// on the Habits page) and then back to Today doesn't always re-run this script at all; mobile
+// Safari especially likes to restore a *frozen snapshot* of the page exactly as it looked when
+// you left, DOM included, instead of reloading it — so the list you see is whatever it was
+// before the delete, until something (like clicking Select, which calls renderHabitToday() itself)
+// forces a fresh re-render against current data. The fix is the standard one for this: listen for
+// `pageshow` and check `event.persisted`, which is specifically true when the page came back from
+// bfcache rather than a real load, and re-run every render that depends on localStorage data.
+window.addEventListener('pageshow', (event) => {
+  if (!event.persisted) return;
+  refreshDay();
+  renderHabitToday();
+  renderHabitDayNav();
+  renderDayNav();
+  renderHomeModels();
+  renderCalLegend();
+  if (document.getElementById('habitCalendarView').style.display !== 'none') renderCalendar();
+});
 document.querySelectorAll('#listModeTabs .tab-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     dayListMode = btn.dataset.mode;
@@ -1196,15 +1461,15 @@ document.getElementById('chronoCollapseBtn').addEventListener('click', () => {
   // scroll attempt on page load had nothing to act on. Re-apply now that it's actually visible.
   if (!chronoCollapsed) scrollGridToAnchor();
 });
-document.getElementById('clearPrioritiesBtn').addEventListener('click', () => {
-  if (!confirm('Clear the priority number from every task on this day?')) return;
+document.getElementById('clearPrioritiesBtn').addEventListener('click', async () => {
+  if (!await SignalConfirm('Clear the priority number from every task on this day?', { okLabel: 'Clear' })) return;
   Data.clearAllPriorities(currentDate);
   renderDayEntries();
 });
-document.getElementById('deleteUnprioritizedBtn').addEventListener('click', () => {
+document.getElementById('deleteUnprioritizedBtn').addEventListener('click', async () => {
   const count = Data.getDayEntries().filter(e => e.date === currentDate && e.priority == null).length;
   if (count === 0) return;
-  if (!confirm(`Delete all ${count} task(s) without a priority number on this day? This can't be undone (unless you restore a backup).`)) return;
+  if (!await SignalConfirm(`Delete all ${count} task(s) without a priority number on this day? This can't be undone (unless you restore a backup).`, { okLabel: 'Delete', danger: true })) return;
   Data.deleteAllUnprioritized(currentDate);
   refreshDay();
 });
@@ -1218,64 +1483,85 @@ loadJournalToday();
 renderFutureNote();
 renderSideRail();
 
-// ---------- first-load splash ----------
+// ---------- first-load splash (tap-to-begin) ----------
+// Previously auto-attempted audio.play() on load and only fell back to waiting for a click if
+// that was blocked. On desktop Chrome that auto-attempt often quietly succeeds (Media Engagement
+// Index / a manually-granted site permission), which is why this felt solid there — but mobile
+// browsers block unprompted audio far more consistently, with no equivalent "trust this site"
+// state to build up (confirmed: iOS Safari in particular has no such setting or heuristic at
+// all), so on phone the auto-attempt reliably failed and fell back to whatever the visitor
+// happened to click first — which is what made this feel randomly delayed/silent on mobile.
+// Fix: don't attempt play() at all until there's a real tap. The splash now waits at "Signal."
+// (overlay blocks all other clicks anyway, so this can't be skipped by clicking something else)
+// for an explicit click/touch/Enter/Space, and that same gesture both starts the audio — a
+// genuine, always-reliable trigger, no blocked-autoplay case left to fall back from — and kicks
+// off the fade. This also fixes the separate "BGM plays at the same time as startup" bug: BGM
+// used to start unconditionally the instant the fade finished, regardless of whether the startup
+// sound had actually played yet or was still stuck in its retry-on-next-click fallback; now both
+// are only ever reachable after the same single tap, in a fixed order.
 (function runSplash() {
   const overlay = document.getElementById('splashOverlay');
   if (!overlay || sessionStorage.getItem('mm_splashDone')) { if (overlay) overlay.remove(); return; }
   sessionStorage.setItem('mm_splashDone', '1');
 
-  // Attempts to play automatically — no tap required. This works reliably once the browser
-  // either trusts the site enough on its own (Chrome's Media Engagement Index, builds up from
-  // regular real use) or, more immediately and deterministically, once you've manually allowed
-  // sound for this exact origin at chrome://settings/content/sound. Falls back to waiting for
-  // the first click/keydown/tap only if the browser actually blocks it outright (e.g. a fresh
-  // browser/device that hasn't been granted that permission yet, or one that doesn't support a
-  // manual override at all, like iOS Safari) — so this degrades gracefully rather than staying
-  // silent if the auto-attempt doesn't work somewhere.
   const audio = document.getElementById('splashAudio');
-  if (audio && typeof audio.play === 'function') {
-    audio.volume = 0.9;
-    const p = audio.play();
-    if (p && typeof p.catch === 'function') {
-      p.catch(() => {
-        // blocked — this is a MULTI-PAGE site, so skip a gesture that's clearly about to
-        // navigate away (a link/submit button): the resulting navigation would tear the whole
-        // page — and the freshly-started audio — down a beat later. Wait for a safer one instead.
-        const isNavigatingGesture = (ev) => {
-          if (ev.type === 'click') return !!(ev.target.closest && ev.target.closest('a[href], button[type="submit"], input[type="submit"]'));
-          if (ev.type === 'keydown') {
-            const onLink = ev.target.closest && ev.target.closest('a[href]');
-            return !!onLink && (ev.key === 'Enter' || ev.key === ' ');
-          }
-          return false;
-        };
-        const retryOnGesture = (ev) => {
-          if (isNavigatingGesture(ev)) return;
-          if (!audio.paused) return;
-          audio.currentTime = 0;
-          audio.play().catch(() => {});
-          document.removeEventListener('click', retryOnGesture, true);
-          document.removeEventListener('keydown', retryOnGesture, true);
-          document.removeEventListener('touchstart', retryOnGesture, true);
-        };
-        document.addEventListener('click', retryOnGesture, true);
-        document.addEventListener('keydown', retryOnGesture, true);
-        document.addEventListener('touchstart', retryOnGesture, true);
-      });
+  let begun = false;
+
+  function begin() {
+    if (begun) return;
+    begun = true;
+    overlay.removeEventListener('click', begin);
+    overlay.removeEventListener('touchstart', begin);
+    overlay.removeEventListener('keydown', onKey);
+
+    // BGM must wait for BOTH the fade-out to finish AND the startup sfx to (almost) finish
+    // playing — not just one or the other. The startup sound (~3.2s) runs longer than the fade
+    // (~1.5s), so tying BGM only to the fade (the old bug) started it well before the sfx ended.
+    // BGM is cued slightly before the sfx's literal last frame (not exactly on 'ended') so the
+    // handoff feels continuous rather than leaving a beat of silence in between.
+    const BGM_LEAD_SEC = 0.7;
+    let sfxDone = !(audio && typeof audio.play === 'function'); // no audio element → don't block on it
+    let fadeDone = false;
+    function maybeStartBgm() {
+      if (sfxDone && fadeDone && window.SignalBgm) window.SignalBgm.startFresh();
     }
+
+    if (!sfxDone) {
+      audio.volume = 0.9;
+      audio.currentTime = 0;
+      const fireEarly = () => {
+        if (sfxDone) return;
+        if (audio.duration && audio.currentTime >= audio.duration - BGM_LEAD_SEC) {
+          sfxDone = true;
+          audio.removeEventListener('timeupdate', fireEarly);
+          maybeStartBgm();
+        }
+      };
+      audio.addEventListener('timeupdate', fireEarly);
+      audio.addEventListener('ended', () => { sfxDone = true; maybeStartBgm(); }, { once: true }); // fallback in case timeupdate's granularity ever misses the early window
+      const p = audio.play();
+      if (p && typeof p.catch === 'function') {
+        // this is a genuine same-gesture play() call, so a rejection here means something else
+        // is wrong, not the usual autoplay block — don't let BGM wait forever on it either way
+        p.catch(() => { sfxDone = true; maybeStartBgm(); });
+      }
+    }
+
+    // a quarter-second hold before the fade starts, so the visual doesn't outrun the audio —
+    // play() needs a brief moment to actually start producing sound
+    setTimeout(() => { overlay.classList.add('splash-fade'); }, 250);
+    overlay.addEventListener('transitionend', (e) => {
+      if (e.propertyName !== 'opacity') return; // fires once for opacity, once for filter — only act once
+      overlay.remove();
+      fadeDone = true;
+      maybeStartBgm();
+    }, { once: true });
   }
+  function onKey(e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); begin(); } }
 
-  // a quarter-second hold before the fade starts, so the visual doesn't outrun the audio —
-  // play() needs a brief moment to actually start producing sound
-  setTimeout(() => {
-    overlay.classList.add('splash-fade');
-  }, 250);
-
-  overlay.addEventListener('transitionend', (e) => {
-    if (e.propertyName !== 'opacity') return; // fires once for opacity, once for filter — only act once
-    overlay.remove();
-    // background music starts right as the startup sequence finishes, as its own separate
-    // track (see nav.js Bgm).
-    if (window.SignalBgm) window.SignalBgm.startFresh();
-  }, { once: true });
+  overlay.tabIndex = 0;
+  overlay.addEventListener('click', begin);
+  overlay.addEventListener('touchstart', begin, { passive: true });
+  overlay.addEventListener('keydown', onKey);
+  overlay.focus({ preventScroll: true });
 })();

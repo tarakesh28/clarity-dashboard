@@ -94,23 +94,23 @@ document.getElementById('massCancelBtn').addEventListener('click', () => {
   renderHabitsList();
   renderArchivedHabits();
 });
-document.getElementById('massToggleArchiveBtn').addEventListener('click', (e) => {
+document.getElementById('massToggleArchiveBtn').addEventListener('click', async (e) => {
   if (selectedIds.size === 0) { alert('Select at least one habit first.'); return; }
   const targetArchived = e.target.dataset.targetArchived !== '0';
   const verb = targetArchived ? 'Move' : 'Restore';
   const msg = targetArchived
     ? `Move ${selectedIds.size} habit(s) to archive? They'll disappear from Today and this list, but nothing is deleted — restore them any time from "Archived habits" below.`
     : `Restore ${selectedIds.size} habit(s) from archive back to the active list?`;
-  if (!confirm(msg)) return;
+  if (!await SignalConfirm(msg, { okLabel: verb })) return;
   selectedIds.forEach(id => Data.updateHabit(id, { archived: targetArchived }));
   selectMode = false;
   updateSelectModeUI();
   renderHabitsList();
   renderArchivedHabits();
 });
-document.getElementById('massDeleteBtn').addEventListener('click', () => {
+document.getElementById('massDeleteBtn').addEventListener('click', async () => {
   if (selectedIds.size === 0) { alert('Select at least one habit first.'); return; }
-  if (!confirm(`Delete ${selectedIds.size} habit(s)? They'll disappear from Habits and Archived habits, but any day you already logged one on keeps showing it if you go back to that date.`)) return;
+  if (!await SignalConfirm(`Delete ${selectedIds.size} habit(s)? They'll disappear from Habits and Archived habits, but any day you already logged one on keeps showing it if you go back to that date.`, { okLabel: 'Delete', danger: true })) return;
   selectedIds.forEach(id => Data.deleteHabit(id));
   selectMode = false;
   updateSelectModeUI();
@@ -218,25 +218,35 @@ function wireHabitsListDragReorder(container) {
 // ---------- shared widgets (color swatches / emoji picker) for the add-habit popup ----------
 function buildColorPicker(container, initialColor, onChange) {
   let selected = initialColor;
-  function draw() {
-    container.innerHTML = '';
-    Data.HABIT_COLOR_PALETTE.forEach(c => {
-      const sw = document.createElement('div');
-      sw.className = 'color-swatch' + (c === selected ? ' selected' : '');
-      sw.style.background = c;
-      sw.addEventListener('click', () => { selected = c; draw(); onChange(selected); });
-      container.appendChild(sw);
-    });
-    const custom = document.createElement('input');
-    custom.type = 'color';
-    custom.className = 'color-native';
-    custom.value = selected.startsWith('#') ? selected : '#D4A24C';
-    custom.title = 'Custom color';
-    custom.addEventListener('input', () => { selected = custom.value; onChange(selected); draw(); });
-    container.appendChild(custom);
-  }
-  draw();
-  return { get: () => selected, set: (c) => { selected = c; draw(); } };
+  container.innerHTML = '';
+  const swatches = [];
+  Data.HABIT_COLOR_PALETTE.forEach(c => {
+    const sw = document.createElement('div');
+    sw.className = 'color-swatch';
+    sw.style.background = c;
+    sw.addEventListener('click', () => { selected = c; custom.value = c; syncSelected(); onChange(selected); });
+    swatches.push({ el: sw, color: c });
+    container.appendChild(sw);
+  });
+  const custom = document.createElement('input');
+  custom.type = 'color';
+  custom.className = 'color-native';
+  custom.value = selected && selected.startsWith('#') ? selected : '#D4A24C';
+  custom.title = 'Custom color';
+  // Real bug found (also happening on desktop): calling draw() here used to wipe and rebuild
+  // the whole container — including this very <input type=color> node — on every 'input' event,
+  // which a native color panel fires continuously while still being dragged, not just once on
+  // release. Recreating the input mid-drag destroyed the exact element the browser's color panel
+  // was anchored to, closing it instantly. Now 'input' only updates state and toggles a class on
+  // the existing swatches — nothing is torn down while the picker is open.
+  custom.addEventListener('input', () => { selected = custom.value; syncSelected(); onChange(selected); });
+  container.appendChild(custom);
+  function syncSelected() { swatches.forEach(({ el, color }) => el.classList.toggle('selected', color === selected)); }
+  syncSelected();
+  return {
+    get: () => selected,
+    set: (c) => { selected = c; if (c && c.startsWith('#')) custom.value = c; syncSelected(); }
+  };
 }
 function wireEmojiPicker(triggerEl, inputEl, popupEl) {
   if (popupEl.dataset.filled !== '1') {

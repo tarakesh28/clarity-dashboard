@@ -122,24 +122,36 @@ function flowPlayEndBeeps() {
     const toneGap = 0.03;
     const groupGap = 0.85;     // long pause between chirps — deliberately spaced out
     const tones = [1150, 820]; // a falling two-note "chirp" reads as more alarming than one flat pitch
-    for (let i = 0; i < chirpCount; i++) {
-      const groupStart = ctx.currentTime + i * groupGap;
-      tones.forEach((freq, t) => {
-        const startAt = groupStart + t * (toneDur + toneGap);
-        const osc = ctx.createOscillator();
-        const gainNode = ctx.createGain();
-        osc.type = 'square'; // harsher/buzzier timbre than a sine — more alarm, less chime
-        osc.frequency.value = freq;
-        gainNode.gain.setValueAtTime(0.0001, startAt);
-        gainNode.gain.exponentialRampToValueAtTime(0.2, startAt + 0.008);
-        gainNode.gain.exponentialRampToValueAtTime(0.0001, startAt + toneDur);
-        osc.connect(gainNode);
-        gainNode.connect(ctx.destination);
-        osc.start(startAt);
-        osc.stop(startAt + toneDur + 0.02);
-      });
+    // A freshly-created AudioContext frequently starts in a 'suspended' state on mobile browsers
+    // (desktop Chrome tends to leave it 'running' immediately, which is why this went unnoticed
+    // there) — nothing actually produces sound until it's explicitly resumed. The timer finishing
+    // on its own isn't a click/tap, so there's no gesture here to lean on either way; resume()
+    // itself doesn't require one, it just has to actually be called.
+    const scheduleChirps = () => {
+      for (let i = 0; i < chirpCount; i++) {
+        const groupStart = ctx.currentTime + i * groupGap;
+        tones.forEach((freq, t) => {
+          const startAt = groupStart + t * (toneDur + toneGap);
+          const osc = ctx.createOscillator();
+          const gainNode = ctx.createGain();
+          osc.type = 'square'; // harsher/buzzier timbre than a sine — more alarm, less chime
+          osc.frequency.value = freq;
+          gainNode.gain.setValueAtTime(0.0001, startAt);
+          gainNode.gain.exponentialRampToValueAtTime(0.2, startAt + 0.008);
+          gainNode.gain.exponentialRampToValueAtTime(0.0001, startAt + toneDur);
+          osc.connect(gainNode);
+          gainNode.connect(ctx.destination);
+          osc.start(startAt);
+          osc.stop(startAt + toneDur + 0.02);
+        });
+      }
+      setTimeout(() => ctx.close(), (chirpCount * groupGap + 1) * 1000);
+    };
+    if (ctx.state === 'suspended') {
+      ctx.resume().then(scheduleChirps).catch(scheduleChirps);
+    } else {
+      scheduleChirps();
     }
-    setTimeout(() => ctx.close(), (chirpCount * groupGap + 1) * 1000);
   } catch (e) { /* audio isn't essential — fail quietly */ }
 }
 
@@ -193,6 +205,15 @@ function renderFlowTaskList() {
   // a selected real task might have rolled to a different date or been deleted since — drop it quietly
   if (flowTask.mode === 'real' && !entries.find(e => e.id === flowTask.entryId)) {
     flowTask.mode = null; flowTask.entryId = null; flowTask.setAt = null; saveFlowTask(flowTask);
+  }
+
+  // The selected task floats to the top of this list — display order only, the Day List's own
+  // ordering is never touched. This is recomputed fresh from scratch on every render (nothing
+  // about it is stored), so deselecting just lets the normal sort order take back over on its
+  // own, with no separate "restore" step needed.
+  if (flowTask.mode === 'real') {
+    const idx = entries.findIndex(e => e.id === flowTask.entryId);
+    if (idx > 0) entries.unshift(entries.splice(idx, 1)[0]);
   }
 
   const locked = isFlowSelectionLocked();

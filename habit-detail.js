@@ -32,25 +32,35 @@ function friendlyDate(dateStr) {
 
 function buildColorPicker(container, initialColor, onChange) {
   let selected = initialColor;
-  function draw() {
-    container.innerHTML = '';
-    Data.HABIT_COLOR_PALETTE.forEach(c => {
-      const sw = document.createElement('div');
-      sw.className = 'color-swatch' + (c === selected ? ' selected' : '');
-      sw.style.background = c;
-      sw.addEventListener('click', () => { selected = c; draw(); onChange(selected); });
-      container.appendChild(sw);
-    });
-    const custom = document.createElement('input');
-    custom.type = 'color';
-    custom.className = 'color-native';
-    custom.value = selected.startsWith('#') ? selected : '#D4A24C';
-    custom.title = 'Custom color';
-    custom.addEventListener('input', () => { selected = custom.value; onChange(selected); draw(); });
-    container.appendChild(custom);
-  }
-  draw();
-  return { get: () => selected, set: (c) => { selected = c; draw(); } };
+  container.innerHTML = '';
+  const swatches = [];
+  Data.HABIT_COLOR_PALETTE.forEach(c => {
+    const sw = document.createElement('div');
+    sw.className = 'color-swatch';
+    sw.style.background = c;
+    sw.addEventListener('click', () => { selected = c; custom.value = c; syncSelected(); onChange(selected); });
+    swatches.push({ el: sw, color: c });
+    container.appendChild(sw);
+  });
+  const custom = document.createElement('input');
+  custom.type = 'color';
+  custom.className = 'color-native';
+  custom.value = selected && selected.startsWith('#') ? selected : '#D4A24C';
+  custom.title = 'Custom color';
+  // Real bug found (also happening on desktop): calling draw() here used to wipe and rebuild
+  // the whole container — including this very <input type=color> node — on every 'input' event,
+  // which a native color panel fires continuously while still being dragged, not just once on
+  // release. Recreating the input mid-drag destroyed the exact element the browser's color panel
+  // was anchored to, closing it instantly. Now 'input' only updates state and toggles a class on
+  // the existing swatches — nothing is torn down while the picker is open.
+  custom.addEventListener('input', () => { selected = custom.value; syncSelected(); onChange(selected); });
+  container.appendChild(custom);
+  function syncSelected() { swatches.forEach(({ el, color }) => el.classList.toggle('selected', color === selected)); }
+  syncSelected();
+  return {
+    get: () => selected,
+    set: (c) => { selected = c; if (c && c.startsWith('#')) custom.value = c; syncSelected(); }
+  };
 }
 
 // Shared metric-display control: shows the day's metric (or the habit's default) as plain
@@ -159,21 +169,21 @@ function init() {
     history.replaceState(null, '', location.pathname + '?id=' + habit.id);
   }
 
-  document.getElementById('deleteHabitBtn').addEventListener('click', () => {
-    if (confirm(`Delete "${habit.name}" and all its history? This can't be undone (unless you restore a backup).`)) {
+  document.getElementById('deleteHabitBtn').addEventListener('click', async () => {
+    if (await SignalConfirm(`Delete "${habit.name}" and all its history? This can't be undone (unless you restore a backup).`, { okLabel: 'Delete', danger: true })) {
       Data.deleteHabit(habit.id);
       location.href = 'habits.html';
     }
   });
   const archiveBtn = document.getElementById('archiveHabitBtn');
   archiveBtn.textContent = habit.archived ? 'Restore from archive' : 'Move to archive';
-  archiveBtn.addEventListener('click', () => {
+  archiveBtn.addEventListener('click', async () => {
     if (habit.archived) {
       Data.updateHabit(habit.id, { archived: false });
       location.reload();
       return;
     }
-    if (confirm(`Move "${habit.name}" to archive? It'll disappear from Today and All Habits, but its history is kept — nothing is deleted.`)) {
+    if (await SignalConfirm(`Move "${habit.name}" to archive? It'll disappear from Today and All Habits, but its history is kept — nothing is deleted.`, { okLabel: 'Archive' })) {
       Data.updateHabit(habit.id, { archived: true });
       location.href = 'habits.html';
     }
@@ -184,7 +194,7 @@ function renderHero() {
   const stats = Data.getHabitStats(habit.id);
   document.getElementById('habitHero').innerHTML = `
     <div class="badge" style="background:${habit.color}22;border-color:${habit.color};">${escapeHtml(habit.icon || '●')}</div>
-    <div>
+    <div class="habit-hero-text">
       <h1>${escapeHtml(habit.name)}</h1>
       <div class="stats">${stats.daysDone} day${stats.daysDone === 1 ? '' : 's'} done${stats.streak ? ' · ' + stats.streak + '-day streak' : ''}${stats.totalMin ? ' · ' + minutesLabel(stats.totalMin) + ' total' : ''}${stats.firstDate ? ' · since ' + ddmmyyyy(stats.firstDate) : ''}</div>
     </div>
@@ -200,6 +210,25 @@ function wireLogDayNav() {
     refreshLogRow();
   });
   document.getElementById('hToday').addEventListener('click', () => { logDate = todayStr(); refreshLogRow(); });
+  document.getElementById('hOpenBtn').addEventListener('click', () => {
+    const picker = document.getElementById('hOpenPicker');
+    picker.value = logDate;
+    // Real root cause of "never worked on iPhone" tracked down this round — it's an open,
+    // unresolved WebKit bug (bugs.webkit.org/show_bug.cgi?id=261703), not a bug in this code:
+    // showPicker() for date inputs simply isn't implemented on iOS Safari at all — it silently
+    // no-ops instead of throwing, so the try/catch below never used to fall through to .click()
+    // there. Same fix as app.js's openDatePicker, inlined here since this is a separate file/page.
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+    if (!isIOS && typeof picker.showPicker === 'function') {
+      try { picker.showPicker(); return; } catch (err) { /* fall through to .click() below */ }
+    }
+    picker.click();
+  });
+  document.getElementById('hOpenPicker').addEventListener('change', (e) => {
+    if (!e.target.value) return;
+    logDate = e.target.value > todayStr() ? todayStr() : e.target.value;
+    refreshLogRow();
+  });
 }
 function refreshLogRow() {
   document.getElementById('hCurrentDateLabel').textContent = friendlyDate(logDate);
@@ -207,6 +236,8 @@ function refreshLogRow() {
   const atToday = logDate >= todayStr();
   nextBtn.disabled = atToday;
   nextBtn.classList.toggle('next-disabled', atToday);
+  document.getElementById('hOpenPicker').max = todayStr(); // set here, not in the click handler
+  // below — see the matching change on the Today page's habit day-nav for why
 
   const log = Data.getHabitLog(habit.id, logDate);
   const toggle = document.getElementById('detailToggle');
@@ -319,6 +350,10 @@ function renderDayDetailDraft() {
   metricInput.disabled = !canEditMetric;
   document.getElementById('ddMetricHint').textContent = canEditMetric ? '' : 'Mark this day done to set a metric just for it.';
   document.getElementById('ddNote').value = ddDraft.note;
+  document.getElementById('ddNote').style.height = ''; // clear any manual drag-resize left over
+  // from a previous day — this modal is one reused DOM node for every day clicked, so a resize
+  // handle drag sets an inline height on that same node that would otherwise silently carry over
+  // to the next day's note too, unrelated to how long that day's note actually is
 }
 function closeDayDetailModal() {
   document.getElementById('dayDetailOverlay').style.display = 'none';
@@ -370,7 +405,13 @@ function renderMonth() {
     cell.className = 'cal-cell' + (dateStr === today ? ' today' : '') + (dateStr === calSelectedDate ? ' selected' : '') + (isFuture ? ' future' : '');
     cell.style.setProperty('--habit-color', habit.color);
     cell.innerHTML = `<span class="cal-daynum">${day}</span><div class="cal-mark${done ? ' done' : ''}">${hasNote ? '<span class="note-dot" title="Has a note"></span>' : ''}</div>`;
-    if (!isFuture) cell.addEventListener('click', () => { calSelectedDate = dateStr; renderMonth(); openDayDetailModal(dateStr); });
+    if (!isFuture) cell.addEventListener('click', () => {
+      calSelectedDate = dateStr;
+      logDate = dateStr; // clicking a calendar day now also moves the day-nav row to that date
+      refreshLogRow();
+      renderMonth();
+      openDayDetailModal(dateStr);
+    });
     grid.appendChild(cell);
   }
 }
@@ -432,7 +473,11 @@ function renderYear() {
           hoverLabel.innerHTML = `<span class="ymd">${ddmmyyyy(dateStr)}</span>${isDone ? ' · done' : ''}${hasNote ? ' · has a note' : ''}<a data-date="${dateStr}">view in month →</a>`;
           hoverLabel.querySelector('a').addEventListener('click', (e) => { e.stopPropagation(); jumpToMonth(dateStr); });
         });
-        if (!isFuture) cell.addEventListener('click', () => openDayDetailModal(dateStr));
+        if (!isFuture) cell.addEventListener('click', () => {
+          logDate = dateStr; // same day-nav sync as the month calendar's own day click
+          refreshLogRow();
+          openDayDetailModal(dateStr);
+        });
       }
       col.appendChild(cell);
     }
@@ -474,10 +519,16 @@ function renderLogFeed() {
     const row = document.createElement('div');
     row.className = 'search-row';
     row.innerHTML = `
-      <span class="sr-date">${ddmmyyyy(l.date)}</span>
+      <button class="sr-date" type="button" data-date="${l.date}" title="Go to ${ddmmyyyy(l.date)}">${ddmmyyyy(l.date)}</button>
       <span class="sr-text">${l.done ? '✓ done' : 'noted'}<span class="lf-metric-slot"></span>${l.note ? ' — ' + escapeHtml(l.note) : ''}</span>
       <span class="sr-meta">${minutesLabel(l.durationMin)}</span>
     `;
+    row.querySelector('.sr-date').addEventListener('click', () => {
+      logDate = l.date; // same day-nav sync as the month/year calendar's own day-cell clicks
+      refreshLogRow();
+      renderMonth();
+      openDayDetailModal(l.date);
+    });
     if (l.metric && l.metric.trim()) {
       const slot = row.querySelector('.lf-metric-slot');
       slot.appendChild(document.createTextNode(' · '));

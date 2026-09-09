@@ -2,12 +2,22 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Signal — All Mental Models</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,500;9..144,600;9..144,700&family=Work+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Signal — Mental Models</title>
+<script>
+  // Blocking, runs before first paint: apply the saved theme immediately so switching to light
+  // mode doesn't flash the dark theme for a frame first on the next page load.
+  try { if (localStorage.getItem('mm_theme') === 'light') { document.documentElement.classList.add('light-theme'); var m = document.querySelector('meta[name="theme-color"]'); if (m) m.setAttribute('content', '#F5EEDD'); } } catch(e){}
+</script>
 <link rel="stylesheet" href="styles.css">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="assets/icons/icon-180.png">
+<link rel="icon" href="assets/icons/icon-32.png">
+<meta name="theme-color" content="#15140F">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-title" content="Signal">
 </head>
 <body>
 <div class="shell" id="shell">
@@ -18,13 +28,24 @@
     <div class="page-eyebrow">The library</div>
     <div class="page-head sticky-head">
       <div class="page-title-row" style="justify-content: space-between; align-items: center;">
-        <h1 class="page-title">All Mental Models</h1>
+        <h1 class="page-title">Mental Models</h1>
         <div class="models-page-head-actions">
-          <button class="ghost-btn" id="unpinAllBtn">Unpin all</button>
+          <button class="ghost-btn icon-only-btn" id="modelsAddBtn" type="button" title="Add a new mental model">+</button>
+          <button class="ghost-btn icon-only-btn" id="modelsSearchToggleBtn" type="button" title="Search mental models">🔍</button>
         </div>
       </div>
     </div>
-    <p class="page-desc">Every model kept here, in one place. Click one to read it and add your own notes underneath. Pin up to two to show them on Today.</p>
+    <div class="page-desc-row">
+      <p class="page-desc">Every model kept here, in one place. Click one to read it and add your own notes underneath. Pin up to two to show them on Today.</p>
+      <button class="ghost-btn" id="unpinAllBtn">Unpin all</button>
+    </div>
+
+    <div id="modelsSearchWrap" style="display:none;">
+      <div class="search-box" style="margin-top:0;">
+        <input type="text" id="modelsSearchInput" placeholder="Search mental models by title or description…">
+        <button id="modelsSearchBtn">Search</button>
+      </div>
+    </div>
 
     <div class="models-grid full" id="fullModelsGrid"></div>
 
@@ -60,10 +81,19 @@
     return String(str).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
 
+  let modelsSearchQuery = '';
   function renderGrid() {
     const grid = document.getElementById('fullModelsGrid');
-    const models = Data.getModels();
-    const pinnedCount = models.filter(m => m.pinned).length;
+    const allModels = Data.getModels();
+    // Pin-limit check must stay based on the full, unfiltered list — otherwise searching for
+    // something could hide an already-pinned model and let a 3rd get pinned by mistake.
+    const pinnedCount = allModels.filter(m => m.pinned).length;
+    let models = allModels;
+    if (modelsSearchQuery) {
+      // description (caption) included per feedback — it's a plain substring check on text
+      // that's already loaded in memory, nothing heavy about it.
+      models = models.filter(m => m.title.toLowerCase().includes(modelsSearchQuery) || (m.caption || '').toLowerCase().includes(modelsSearchQuery));
+    }
     grid.innerHTML = '';
 
     models.forEach(m => {
@@ -97,6 +127,27 @@
     renderGrid();
   });
 
+  document.getElementById('modelsAddBtn').addEventListener('click', openAddModal);
+
+  document.getElementById('modelsSearchToggleBtn').addEventListener('click', () => {
+    const wrap = document.getElementById('modelsSearchWrap');
+    const opening = wrap.style.display === 'none';
+    wrap.style.display = opening ? 'block' : 'none';
+    if (opening) {
+      document.getElementById('modelsSearchInput').focus();
+    } else {
+      document.getElementById('modelsSearchInput').value = '';
+      modelsSearchQuery = '';
+      renderGrid();
+    }
+  });
+  function runModelsSearch() {
+    modelsSearchQuery = document.getElementById('modelsSearchInput').value.trim().toLowerCase();
+    renderGrid();
+  }
+  document.getElementById('modelsSearchBtn').addEventListener('click', runModelsSearch);
+  document.getElementById('modelsSearchInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') runModelsSearch(); });
+
   // ---- add-model modal ----
   let pickedImageDataUrl = null;
   function openAddModal() {
@@ -113,15 +164,44 @@
   document.getElementById('modelCancelBtn').addEventListener('click', closeAddModal);
   document.getElementById('addModelOverlay').addEventListener('click', (e) => { if (e.target.id === 'addModelOverlay') closeAddModal(); });
 
-  document.getElementById('modelImgInput').addEventListener('change', (e) => {
+  // Full-size phone photos (often several MB each) stored raw would eat through localStorage's
+  // ~5-10MB per-origin budget in just a couple of images — shared with every other bit of app
+  // data. Downscaled here to a cap generous enough to still look sharp in the full-viewport
+  // lightbox zoom on a large monitor, re-encoded as JPEG. Never upscales a smaller image.
+  const MODEL_IMG_MAX_DIM = 1920;
+  const MODEL_IMG_QUALITY = 0.85;
+  function resizeImageFile(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const img = new Image();
+        img.onload = () => {
+          let { width, height } = img;
+          const scale = Math.min(1, MODEL_IMG_MAX_DIM / Math.max(width, height));
+          width = Math.round(width * scale);
+          height = Math.round(height * scale);
+          const canvas = document.createElement('canvas');
+          canvas.width = width; canvas.height = height;
+          canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+          resolve(canvas.toDataURL('image/jpeg', MODEL_IMG_QUALITY));
+        };
+        img.onerror = () => reject(new Error('Could not read that image.'));
+        img.src = reader.result;
+      };
+      reader.onerror = () => reject(new Error('Could not read that file.'));
+      reader.readAsDataURL(file);
+    });
+  }
+  document.getElementById('modelImgInput').addEventListener('change', async (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      pickedImageDataUrl = reader.result;
+    try {
+      pickedImageDataUrl = await resizeImageFile(file);
       document.getElementById('modelImgPreview').innerHTML = `<img src="${pickedImageDataUrl}">`;
-    };
-    reader.readAsDataURL(file);
+    } catch (err) {
+      alert('Could not process that image — try a different file.');
+      console.error(err);
+    }
   });
 
   document.getElementById('modelSaveBtn').addEventListener('click', () => {

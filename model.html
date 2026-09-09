@@ -2,12 +2,22 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Signal — Mental Model</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,500;9..144,600;9..144,700&family=Work+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<script>
+  // Blocking, runs before first paint: apply the saved theme immediately so switching to light
+  // mode doesn't flash the dark theme for a frame first on the next page load.
+  try { if (localStorage.getItem('mm_theme') === 'light') { document.documentElement.classList.add('light-theme'); var m = document.querySelector('meta[name="theme-color"]'); if (m) m.setAttribute('content', '#F5EEDD'); } } catch(e){}
+</script>
 <link rel="stylesheet" href="styles.css">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="assets/icons/icon-180.png">
+<link rel="icon" href="assets/icons/icon-32.png">
+<meta name="theme-color" content="#15140F">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-title" content="Signal">
 </head>
 <body>
 <div class="shell" id="shell">
@@ -16,7 +26,7 @@
 
   <main class="main">
     <div class="page-head">
-      <a href="models.html" class="ghost-btn" style="display:inline-flex; margin-bottom:18px;">← All mental models</a>
+      <button class="ghost-btn" id="modelBackBtn" style="display:inline-flex; margin-bottom:18px;">← Back</button>
     </div>
 
     <div class="model-detail-hero" id="modelHero">
@@ -52,6 +62,14 @@
   const slug = params.get('slug');
   let model = Data.getModel(slug);
   const hero = document.getElementById('modelHero');
+
+  // prefers real browser history (so it returns to wherever you actually came from — Today
+  // page or the All Models list) and only falls back to All Models if there's no history to
+  // use — same pattern as the habit-detail page's own back button
+  document.getElementById('modelBackBtn').addEventListener('click', () => {
+    if (window.history.length > 1) window.history.back();
+    else location.href = 'models.html';
+  });
 
   if (!model) {
     hero.innerHTML = `<div style="grid-column:1/-1;"><p class="page-desc">Couldn't find that model — it may have been deleted. <a href="models.html" style="color:var(--gold)">Back to all models →</a></p></div>`;
@@ -90,8 +108,8 @@
         model = Data.getModel(slug);
         renderActions();
       });
-      document.getElementById('deleteModelBtn').addEventListener('click', () => {
-        if (confirm(`Delete "${model.title}" and all its notes? This can't be undone (unless you restore a backup).`)) {
+      document.getElementById('deleteModelBtn').addEventListener('click', async () => {
+        if (await SignalConfirm(`Delete "${model.title}" and all its notes? This can't be undone (unless you restore a backup).`, { okLabel: 'Delete', danger: true })) {
           Data.deleteModel(slug);
           location.href = 'models.html';
         }
@@ -115,8 +133,8 @@
         </div>
       `).join('');
       box.querySelectorAll('.note-del').forEach(btn => {
-        btn.addEventListener('click', () => {
-          if (confirm('Delete this note?')) {
+        btn.addEventListener('click', async () => {
+          if (await SignalConfirm('Delete this note?', { okLabel: 'Delete', danger: true })) {
             Data.deleteModelNote(slug, btn.dataset.id);
             renderNotes();
           }

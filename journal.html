@@ -2,12 +2,22 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Signal — Journal</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,500;9..144,600;9..144,700&family=Work+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<script>
+  // Blocking, runs before first paint: apply the saved theme immediately so switching to light
+  // mode doesn't flash the dark theme for a frame first on the next page load.
+  try { if (localStorage.getItem('mm_theme') === 'light') { document.documentElement.classList.add('light-theme'); var m = document.querySelector('meta[name="theme-color"]'); if (m) m.setAttribute('content', '#F5EEDD'); } } catch(e){}
+</script>
 <link rel="stylesheet" href="styles.css">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="assets/icons/icon-180.png">
+<link rel="icon" href="assets/icons/icon-32.png">
+<meta name="theme-color" content="#15140F">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-title" content="Signal">
 </head>
 <body>
 <div class="shell" id="shell">

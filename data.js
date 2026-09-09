@@ -93,6 +93,12 @@ const Data = {
     let seriesId = entry.seriesId;
     // turning repeat on for the first time on a previously plain entry: mint a series id now
     if (patch.repeatDaily && !seriesId) seriesId = uid();
+    // turning repeat OFF: fully detach from the series, not just stop generating new occurrences.
+    // Previously seriesId was left in place even after repeatDaily was set to false — so any
+    // later, unrelated edit to this same entry (patch without touching repeatDaily at all) would
+    // still trip the "drop future clones in this series" branch below using that stale id. A
+    // plain task should behave like it never had a series once repeat is off.
+    if (patch.repeatDaily === false) seriesId = null;
     const updated = Object.assign({}, entry, patch, { seriesId, updatedAt: Date.now() });
     arr[idx] = updated;
     let result = arr;
@@ -218,11 +224,11 @@ const Data = {
     return kept;
   },
   // day-list "archive": a manually-archived task (any date, any status) OR an unchecked,
-  // non-repeating task stuck on a past date (rough tasks that haven't been swept up by
-  // rolloverUnfinishedRoughTasks yet, and timed tasks, which never auto-roll). Nothing here
-  // is ever truly lost from sight — everything surfaced is restorable. archiveDismissed
-  // (see dismissDayEntryFromArchive below) suppresses an entry from this list even if it'd
-  // otherwise still qualify via the stale-past-task rule.
+  // non-repeating task stuck on a past date. Nothing here is ever truly lost from sight —
+  // everything surfaced is restorable, and nothing here ever gets silently relocated off its
+  // own day (see the removed rolloverUnfinishedRoughTasks note below). archiveDismissed (see
+  // dismissDayEntryFromArchive below) suppresses an entry from this list even if it'd otherwise
+  // still qualify via the stale-past-task rule.
   getArchivedDayEntries() {
     const today = todayStr();
     return loadArr(STORE.dayEntries).filter(e => !e.archiveDismissed && (e.archived === true || (!e.done && !e.repeatDaily && e.date < today)));
@@ -235,14 +241,30 @@ const Data = {
     if (idx > -1) { arr[idx] = Object.assign({}, arr[idx], { archived: true, updatedAt: Date.now() }); saveArr(STORE.dayEntries, arr); }
     return arr;
   },
-  // pulls one back into today's active list — a manual escape hatch for anything that got
-  // left behind (or was manually archived), whether or not the automatic rollover would've caught it.
-  // archiveDismissed resets too — restoring gives the entry a fresh start, so it should be able
-  // to reappear in Archive again later if it goes stale a second time.
+  // pulls a copy into today's active list — a manual escape hatch for anything that got left
+  // behind (or was manually archived). Real bug found: this used to mutate the original entry's
+  // own `date` to today, which "restored" it by relocating it — silently erasing it from
+  // whatever day it actually belonged to, which is exactly backwards for a task that's meant to
+  // record what happened on a given day. Now it leaves the original entry's date untouched and
+  // creates a fresh copy dated today instead; the original just quietly steps out of Archive
+  // (the same soft-dismiss used by the Archive dropdown's own "delete", since restoring it here
+  // counts as having acted on it) rather than disappearing from its own day.
   restoreDayEntryToToday(id) {
     const arr = loadArr(STORE.dayEntries);
     const idx = arr.findIndex(e => e.id === id);
-    if (idx > -1) { arr[idx] = Object.assign({}, arr[idx], { date: todayStr(), archived: false, archiveDismissed: false, updatedAt: Date.now() }); saveArr(STORE.dayEntries, arr); }
+    if (idx > -1) {
+      const original = arr[idx];
+      arr[idx] = Object.assign({}, original, { archived: false, archiveDismissed: true, updatedAt: Date.now() });
+      const today = todayStr();
+      const now = Date.now();
+      const todayEntries = arr.filter(e => e.date === today);
+      const maxOrder = todayEntries.reduce((m, e) => Math.max(m, e.order || 0), 0);
+      arr.push(Object.assign({}, original, {
+        id: uid(), date: today, done: false, archived: false, archiveDismissed: false,
+        repeatDaily: false, seriesId: null, order: maxOrder + 1, createdAt: now, updatedAt: now
+      }));
+      saveArr(STORE.dayEntries, arr);
+    }
     return arr;
   },
   // the Archive dropdown's own "delete" is a soft dismiss, same idea as a deleted habit: it
@@ -257,23 +279,13 @@ const Data = {
     return arr;
   },
 
-  // rough (untimed, non-repeating) tasks left unfinished roll forward onto real "today" —
-  // timed tasks stay put unless repeatDaily handles them via the series engine above.
-  // anchored to real today (not whatever date is being viewed), same as the repeat top-up.
-  rolloverUnfinishedRoughTasks() {
-    const arr = loadArr(STORE.dayEntries);
-    const today = todayStr();
-    let changed = false;
-    arr.forEach(e => {
-      if (!e.time && !e.done && !e.repeatDaily && e.date < today) {
-        e.date = today;
-        e.updatedAt = Date.now();
-        changed = true;
-      }
-    });
-    if (changed) saveArr(STORE.dayEntries, arr);
-    return changed;
-  },
+  // Real bug found: a non-repeating task without any time set ("rough") used to get physically
+  // relocated onto today once it went a day unfinished — e.getDate mutated in place — which is
+  // exactly the "still repeats to the next day, just vanishes from where it started" behavior
+  // reported. That's now removed entirely: a rough task just stays on the day it was created,
+  // done or not, and getArchivedDayEntries' own stale-past-task rule (above) is what surfaces it
+  // for attention instead — without ever moving it. This function (and both of its call sites in
+  // app.js) has been deleted along with the mechanic.
 
   // ================= HABITS =================
   getHabits() { return loadArr(STORE.habits); },
@@ -283,9 +295,12 @@ const Data = {
     const now = Date.now();
     const color = habit.color || colorForIndex(arr.length);
     const maxOrder = arr.reduce((m, h) => Math.max(m, h.order || 0), 0);
-    arr.push(Object.assign({ id: uid(), createdAt: now, updatedAt: now, archived: false, metric: '', order: maxOrder + 1 }, habit, { color }));
+    const newHabit = Object.assign({ id: uid(), createdAt: now, updatedAt: now, archived: false, metric: '', order: maxOrder + 1 }, habit, { color });
+    arr.push(newHabit);
     saveArr(STORE.habits, arr);
-    return arr;
+    return newHabit; // was returning the whole array — harmless today since no caller currently
+    // reads the return value, but a real latent bug (any future `const h = Data.addHabit(...);
+    // location.href = 'habit.html?id=' + h.id` would silently link to id=undefined)
   },
   updateHabit(id, patch) {
     const arr = loadArr(STORE.habits);
@@ -310,9 +325,23 @@ const Data = {
   // untouched — a day you already logged it on keeps showing it if you navigate back to
   // that exact date (see getHabitsForDate), until that specific day's log is removed there.
   deleteHabit(id) {
+    // A habit with zero logged days has no history worth preserving as a soft-deleted "ghost" —
+    // soft-deleting it anyway would just leave a permanent, invisible tombstone (and, if it were
+    // ever surfaced somewhere like the Calendar legend, a "(deleted)" entry with nothing real
+    // behind it). Hard-delete those outright instead; a habit that's been logged at least once
+    // still goes through the normal soft-delete/ghost path so that real history stays visible.
+    const hasAnyLog = loadArr(STORE.habitLogs).some(l => l.habitId === id);
+    if (!hasAnyLog) { Data.hardDeleteHabit(id); return; }
     const arr = loadArr(STORE.habits);
     const idx = arr.findIndex(h => h.id === id);
     if (idx > -1) { arr[idx] = Object.assign({}, arr[idx], { archived: true, deleted: true, updatedAt: Date.now() }); saveArr(STORE.habits, arr); }
+  },
+  // full, permanent removal — the habit record AND every one of its log entries, gone for
+  // good. Only ever offered once a habit is already soft-deleted (the "ghost" row) — this is
+  // that ghost's own cleanup action, not a substitute for the normal delete above.
+  hardDeleteHabit(id) {
+    saveArr(STORE.habits, loadArr(STORE.habits).filter(h => h.id !== id));
+    saveArr(STORE.habitLogs, loadArr(STORE.habitLogs).filter(l => l.habitId !== id));
   },
 
   // ================= HABIT LOGS =================
@@ -531,30 +560,33 @@ function wireBackupControls() {
   const exportBtn = document.getElementById('exportBtn');
   const importBtn = document.getElementById('importBtn');
   const importInput = document.getElementById('importFileInput');
+  const importBtnLabel = importBtn ? importBtn.querySelector('.label') : null;
   if (exportBtn) exportBtn.addEventListener('click', () => Data.exportAll());
   let awaitingRestoreClick = false;
   if (importBtn && importInput) {
-    importBtn.addEventListener('click', () => {
+    importBtn.addEventListener('click', async () => {
       // second click of a two-step flow (see below) — goes straight to the file picker with
       // no more dialogs first, since this needs to be a genuinely fresh, uninterrupted click
       if (awaitingRestoreClick) {
         awaitingRestoreClick = false;
+        if (importBtnLabel) importBtnLabel.textContent = 'Restore from backup';
         importInput.click();
         return;
       }
       // ask BEFORE the file picker opens, not after — deciding whether to protect yourself
       // should come before picking what to restore, not as an interruption in between
-      if (confirm('Save a safety backup of your current data before restoring? (Recommended, but your call.)')) {
+      const wantsBackup = await SignalConfirm('Save a safety backup of your current data before restoring? (Recommended, but your call.)');
+      if (wantsBackup) {
         Data.exportAll();
-        // Chaining a THIRD dialog (the file picker) off the tail of two already-shown blocking
-        // dialogs (this confirm, plus a follow-up alert) turned out to silently fail — Chrome
-        // treats a click's "permission" to open a file picker as expired once too much has
-        // happened since the original click, specifically to stop pages from chaining surprise
-        // pickers/popups indefinitely off one click. There's no way around that from here, so
-        // instead of guessing wrong again, this just asks for one more real click of your own —
-        // that fresh click is what actually opens the picker, cleanly and reliably.
+        // Chaining the file picker directly off the tail of this — even now that this is a
+        // non-blocking custom modal instead of native confirm()/alert() — still isn't worth
+        // risking: the earlier native-dialog version of this exact chain (confirm + alert +
+        // file picker, all off one click) silently failed once too much had happened since the
+        // original click. Rather than gamble a modal-based version behaves differently, this
+        // still asks for one more real click — that fresh click is what actually opens the
+        // picker, same proven-reliable shape as before, just without the ugly native alert().
         awaitingRestoreClick = true;
-        alert('Backup download started. Once you\'ve saved it, click "Restore from backup" again to choose a file to restore.');
+        if (importBtnLabel) importBtnLabel.textContent = 'Click to choose file →';
       } else {
         importInput.click();
       }

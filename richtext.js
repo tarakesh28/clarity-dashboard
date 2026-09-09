@@ -71,8 +71,10 @@ function initRichTextEditor(el, toolbarEl, opts) {
       if (full > CAP) {
         expandBtn.style.display = 'flex';
         expandBtn.textContent = expanded ? '▴ Collapse' : '▾ Expand';
+        el.classList.add('has-expand-btn'); // squares the textarea's bottom corners to flush-fit against the button — see styles.css
       } else {
         expandBtn.style.display = 'none';
+        el.classList.remove('has-expand-btn');
       }
     }
   }
