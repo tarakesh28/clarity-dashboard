@@ -35,6 +35,10 @@ function todayStr() {
   const d = new Date();
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 }
+function tsToLocalDateStr(ts) {
+  const d = new Date(ts);
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
 function addDaysStr(dateStr, delta) {
   const [y, m, d] = dateStr.split('-').map(Number);
   const dt = new Date(y, m - 1, d);
@@ -354,12 +358,17 @@ const Data = {
     saveArr(STORE.habitLogs, loadArr(STORE.habitLogs).filter(l => !(l.habitId === habitId && l.date === date)));
   },
   // habits to show when viewing one specific date's snapshot (Today page's backward-navigable
-  // habit list): every active habit, PLUS any deleted habit that still has a log entry for
-  // exactly this date — so a deleted habit's history survives on the day it actually happened.
-  // Merely-archived-but-not-deleted habits stay hidden here, same as before.
+  // habit list): every active habit that already existed by that date, PLUS any deleted habit
+  // that still has a log entry for exactly this date — so a deleted habit's history survives on
+  // the day it actually happened. Merely-archived-but-not-deleted habits stay hidden here, same
+  // as before.
+  // The createdAt check is a fix, not original behavior — this used to show every active habit
+  // on every date with no lower bound at all, including dates before the habit was even made.
+  // `!h.createdAt` guard is there for any pre-existing habit from before this field was reliably
+  // set — treated as "always existed" rather than risk hiding real history over a missing field.
   getHabitsForDate(date) {
     const all = loadArr(STORE.habits);
-    const active = all.filter(h => !h.archived);
+    const active = all.filter(h => !h.archived && (!h.createdAt || tsToLocalDateStr(h.createdAt) <= date));
     const logs = loadArr(STORE.habitLogs);
     const ghosts = all.filter(h => h.deleted && logs.some(l => l.habitId === h.id && l.date === date));
     return active.concat(ghosts);

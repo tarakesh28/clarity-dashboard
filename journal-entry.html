@@ -7,7 +7,14 @@
 <script>
   // Blocking, runs before first paint: apply the saved theme immediately so switching to light
   // mode doesn't flash the dark theme for a frame first on the next page load.
-  try { if (localStorage.getItem('mm_theme') === 'light') { document.documentElement.classList.add('light-theme'); var m = document.querySelector('meta[name="theme-color"]'); if (m) m.setAttribute('content', '#F5EEDD'); } } catch(e){}
+  try {
+    var mmStored = localStorage.getItem('mm_theme');
+    // No manual choice saved yet: follow the OS light/dark setting instead of always defaulting
+    // to dark. Once the user actually toggles it (nav.js), that saved choice always wins here
+    // over whatever the OS is doing.
+    var mmWantLight = mmStored ? mmStored === 'light' : !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches);
+    if (mmWantLight) { document.documentElement.classList.add('light-theme'); var m = document.querySelector('meta[name="theme-color"]'); if (m) m.setAttribute('content', '#F5EEDD'); }
+  } catch(e){}
 </script>
 <link rel="stylesheet" href="styles.css">
 <link rel="manifest" href="manifest.json">

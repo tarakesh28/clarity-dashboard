@@ -7,9 +7,31 @@
 <script>
   // Blocking, runs before first paint: apply the saved theme immediately so switching to light
   // mode doesn't flash the dark theme for a frame first on the next page load.
-  try { if (localStorage.getItem('mm_theme') === 'light') { document.documentElement.classList.add('light-theme'); var m = document.querySelector('meta[name="theme-color"]'); if (m) m.setAttribute('content', '#F5EEDD'); } } catch(e){}
+  try {
+    var mmStored = localStorage.getItem('mm_theme');
+    // No manual choice saved yet: follow the OS light/dark setting instead of always defaulting
+    // to dark. Once the user actually toggles it (nav.js), that saved choice always wins here
+    // over whatever the OS is doing.
+    var mmWantLight = mmStored ? mmStored === 'light' : !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches);
+    if (mmWantLight) { document.documentElement.classList.add('light-theme'); var m = document.querySelector('meta[name="theme-color"]'); if (m) m.setAttribute('content', '#F5EEDD'); }
+  } catch(e){}
 </script>
 <link rel="stylesheet" href="styles.css">
+<!-- Preloaded specifically because this is the splash page: the splash's "Signal." text and its
+     "tap to begin" hint are the very first thing rendered, before styles.css's own font-display:
+     swap has had any real time to work with — font-display:swap shows a fallback font immediately
+     and swaps once the real one loads, which is exactly the visible font-change reported here.
+     Rather than adding an artificial delay to wait it out, this preload starts the two fonts
+     actually used on this screen (Fraunces for "Signal.", Plex Mono for the hint) downloading as
+     early as possible — and the splash already waits for an explicit tap before doing anything
+     else, so in practice the font is very likely to have already finished swapping in during that
+     natural pause, well before the person actually taps. `crossorigin` is required on font
+     preloads specifically (even same-origin ones) or the browser fetches the file twice instead
+     of reusing the preloaded one. Only added here, not the other 7 pages — this is where the
+     splash (and the flash) actually is; the rest render body text first, not a single large
+     display-font word, so the same swap is far less visually noticeable there. -->
+<link rel="preload" href="assets/fonts/Fraunces-Variable.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="assets/fonts/IBMPlexMono-Regular.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="assets/icons/icon-180.png">
 <link rel="icon" href="assets/icons/icon-32.png">

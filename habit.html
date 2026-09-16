@@ -7,7 +7,14 @@
 <script>
   // Blocking, runs before first paint: apply the saved theme immediately so switching to light
   // mode doesn't flash the dark theme for a frame first on the next page load.
-  try { if (localStorage.getItem('mm_theme') === 'light') { document.documentElement.classList.add('light-theme'); var m = document.querySelector('meta[name="theme-color"]'); if (m) m.setAttribute('content', '#F5EEDD'); } } catch(e){}
+  try {
+    var mmStored = localStorage.getItem('mm_theme');
+    // No manual choice saved yet: follow the OS light/dark setting instead of always defaulting
+    // to dark. Once the user actually toggles it (nav.js), that saved choice always wins here
+    // over whatever the OS is doing.
+    var mmWantLight = mmStored ? mmStored === 'light' : !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches);
+    if (mmWantLight) { document.documentElement.classList.add('light-theme'); var m = document.querySelector('meta[name="theme-color"]'); if (m) m.setAttribute('content', '#F5EEDD'); }
+  } catch(e){}
 </script>
 <link rel="stylesheet" href="styles.css">
 <link rel="manifest" href="manifest.json">
@@ -25,8 +32,16 @@
   <aside class="sidebar" id="sidebarMount" data-active="habits"></aside>
 
   <main class="main">
-    <div class="page-head">
-      <button class="ghost-btn" id="backBtn" style="display:inline-flex; margin-bottom:18px;">← Back</button>
+    <div class="page-head sticky-head no-desc">
+      <div class="habit-sticky-row">
+        <button class="ghost-btn" id="backBtn" style="display:inline-flex;">← Back</button>
+        <span class="habit-sticky-name" id="habitStickyName"></span>
+      </div>
+    </div>
+
+    <div class="habit-prevnext-row" id="habitPrevNextRow">
+      <button class="ghost-btn" id="prevHabitBtn">‹ Prev</button>
+      <button class="ghost-btn" id="nextHabitBtn">Next ›</button>
     </div>
 
     <div class="habit-detail-hero" id="habitHero"></div>
@@ -81,13 +96,13 @@
       <input type="text" id="detailNoteInput" placeholder="Note…">
     </div>
 
-    <div class="tabs">
+    <div class="tabs" id="calTabs">
       <button class="tab-btn active" id="tabMonth">Month</button>
       <button class="tab-btn" id="tabYear">Year</button>
     </div>
 
     <div id="monthView">
-      <div class="cal-nav">
+      <div class="cal-nav" id="mCalNav">
         <button id="mCalPrev">‹</button>
         <span class="cal-label" id="mCalLabel">—</span>
         <button id="mCalNext">›</button>
@@ -103,7 +118,8 @@
       </div>
       <div class="year-heatmap-wrap">
         <div class="year-months" id="yMonths"></div>
-        <div style="display:flex;">
+        <div class="year-dow-header" id="yDowHeader"><span class="year-row-month-label"></span><span class="ydow-cell">S</span><span class="ydow-cell">M</span><span class="ydow-cell">T</span><span class="ydow-cell">W</span><span class="ydow-cell">T</span><span class="ydow-cell">F</span><span class="ydow-cell">S</span></div>
+        <div class="year-grid-row">
           <div class="year-dow-labels"><span></span><span>Mon</span><span></span><span>Wed</span><span></span><span>Fri</span><span></span></div>
           <div class="year-heatmap" id="yGrid"></div>
         </div>

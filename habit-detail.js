@@ -19,14 +19,15 @@ const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const MONTHS_SHORT = MONTHS.map(m => m.slice(0, 3));
 
-function friendlyDate(dateStr) {
+function friendlyDate(dateStr, abbreviateOnMobile) {
   const d = parseDateStr(dateStr);
   const today = todayStr();
   const y = addDays(today, -1), t = addDays(today, 1);
+  const mobile = abbreviateOnMobile && window.matchMedia('(max-width: 760px)').matches;
   let prefix = '';
   if (dateStr === today) prefix = 'Today · ';
-  else if (dateStr === y) prefix = 'Yesterday · ';
-  else if (dateStr === t) prefix = 'Tomorrow · ';
+  else if (dateStr === y) prefix = (mobile ? 'Yest' : 'Yesterday') + ' · ';
+  else if (dateStr === t) prefix = (mobile ? 'Tom' : 'Tomorrow') + ' · ';
   return prefix + DOW[d.getDay()] + ', ' + d.getDate() + ' ' + MONTHS[d.getMonth()].slice(0, 3) + ' ' + d.getFullYear();
 }
 
@@ -141,8 +142,25 @@ if (!habit || habit.deleted) {
   init();
 }
 
+function byOrder(a, b) { return (a.order ?? a.createdAt) - (b.order ?? b.createdAt); }
+
+function wirePrevNextHabit() {
+  const list = Data.getHabits().filter(h => !h.deleted).sort(byOrder);
+  const idx = list.findIndex(h => h.id === habit.id);
+  const row = document.getElementById('habitPrevNextRow');
+  if (idx === -1 || list.length <= 1) { row.style.display = 'none'; return; }
+  document.getElementById('prevHabitBtn').addEventListener('click', () => {
+    location.href = 'habit.html?id=' + list[(idx - 1 + list.length) % list.length].id;
+  });
+  document.getElementById('nextHabitBtn').addEventListener('click', () => {
+    location.href = 'habit.html?id=' + list[(idx + 1) % list.length].id;
+  });
+}
+
 function init() {
   document.title = 'Signal — ' + habit.name;
+  document.getElementById('habitStickyName').textContent = (habit.icon ? habit.icon + ' ' : '') + habit.name;
+  wirePrevNextHabit();
   renderHero();
   colorCtrl = buildColorPicker(document.getElementById('editColorPicker'), habit.color, () => {});
   wireEmojiPicker(document.getElementById('editIconHintBtn'), document.getElementById('editIcon'), document.getElementById('editIconPopup'));
@@ -192,11 +210,21 @@ function init() {
 
 function renderHero() {
   const stats = Data.getHabitStats(habit.id);
+  // Each stat ("5 days done", "12-day streak", "since 05-09-2025"...) is wrapped in its own
+  // nowrap span, joined by a plain (breakable) " · " — on mobile, where the full line doesn't
+  // always fit, this makes sure a wrap lands between stat points (at the separator) rather than
+  // splitting one apart mid-phrase (e.g. "since" stranded on one line, its date pushed to the
+  // next) — see the matching mobile CSS for .stat-point.
+  const parts = [`${stats.daysDone} day${stats.daysDone === 1 ? '' : 's'} done`];
+  if (stats.streak) parts.push(`${stats.streak}-day streak`);
+  if (stats.totalMin) parts.push(`${minutesLabel(stats.totalMin)} total`);
+  if (stats.firstDate) parts.push(`since ${ddmmyyyy(stats.firstDate)}`);
+  const statsHtml = parts.map(p => `<span class="stat-point">${p}</span>`).join(' · ');
   document.getElementById('habitHero').innerHTML = `
     <div class="badge" style="background:${habit.color}22;border-color:${habit.color};">${escapeHtml(habit.icon || '●')}</div>
     <div class="habit-hero-text">
       <h1>${escapeHtml(habit.name)}</h1>
-      <div class="stats">${stats.daysDone} day${stats.daysDone === 1 ? '' : 's'} done${stats.streak ? ' · ' + stats.streak + '-day streak' : ''}${stats.totalMin ? ' · ' + minutesLabel(stats.totalMin) + ' total' : ''}${stats.firstDate ? ' · since ' + ddmmyyyy(stats.firstDate) : ''}</div>
+      <div class="stats">${statsHtml}</div>
     </div>
   `;
 }
@@ -231,13 +259,20 @@ function wireLogDayNav() {
   });
 }
 function refreshLogRow() {
-  document.getElementById('hCurrentDateLabel').textContent = friendlyDate(logDate);
+  // abbreviateOnMobile: true — matches the same Yesterday→Yest / Tomorrow→Tom treatment already
+  // applied to the Today page's Day List and Habit Tracker date-nav labels (see app.js's own
+  // friendlyDate); the day-detail modal's heading below keeps the full word, same as those.
+  document.getElementById('hCurrentDateLabel').textContent = friendlyDate(logDate, true);
   const nextBtn = document.getElementById('hNext');
   const atToday = logDate >= todayStr();
   nextBtn.disabled = atToday;
   nextBtn.classList.toggle('next-disabled', atToday);
   document.getElementById('hOpenPicker').max = todayStr(); // set here, not in the click handler
   // below — see the matching change on the Today page's habit day-nav for why
+  // Kept in step with logDate on every render, same reasoning as app.js's renderDayNav()/
+  // renderHabitDayNav() — a real tap now lands directly on this input (see .open-day-picker in
+  // styles.css), bypassing the click handler that used to be the only place .value got set.
+  document.getElementById('hOpenPicker').value = logDate;
 
   const log = Data.getHabitLog(habit.id, logDate);
   const toggle = document.getElementById('detailToggle');
@@ -393,6 +428,10 @@ function renderMonth() {
   const logs = Data.getHabitLogs().filter(l => l.habitId === habit.id);
   const today = todayStr();
   const isFutureMonth = year > Number(today.slice(0, 4)) || (year === Number(today.slice(0, 4)) && month > Number(today.slice(5, 7)) - 1);
+  const isCurrentOrFutureMonth = isFutureMonth || (year === Number(today.slice(0, 4)) && month === Number(today.slice(5, 7)) - 1);
+  const mCalNextBtn = document.getElementById('mCalNext');
+  mCalNextBtn.disabled = isCurrentOrFutureMonth;
+  mCalNextBtn.classList.toggle('next-disabled', isCurrentOrFutureMonth);
 
   for (let i = 0; i < firstDow; i++) { const el = document.createElement('div'); el.className = 'cal-cell empty'; grid.appendChild(el); }
   for (let day = 1; day <= daysInMonth; day++) {
@@ -421,8 +460,19 @@ function wireMonthNav() {
 }
 
 // ---------- year heatmap (this habit only) ----------
+// Mobile: rotated to weeks-as-rows (stacked top-to-bottom, days left-to-right within each row)
+// instead of desktop's weeks-as-columns (53 columns marching across the year) — that column
+// layout is exactly what forced the horizontal overflow/scrolling reported repeatedly in
+// portrait. Rotating fits a phone's width with no scrolling needed at all; the desktop layout
+// is untouched. Checked once per render via the same 760px breakpoint the rest of the CSS uses
+// (not a live-resize listener — matches the same one-time-at-render-time pattern already used
+// for BGM's mobile volume), so switching a tab/year while already in the view re-checks it too.
 function renderYear() {
   document.getElementById('yLabel').textContent = yearVal;
+  const atCurrentOrFutureYear = yearVal >= new Date().getFullYear();
+  const yNextBtn = document.getElementById('yNext');
+  yNextBtn.disabled = atCurrentOrFutureYear;
+  yNextBtn.classList.toggle('next-disabled', atCurrentOrFutureYear);
   const logs = Data.getHabitLogs().filter(l => l.habitId === habit.id);
   const byDate = new Map(logs.map(l => [l.date, l]));
 
@@ -432,65 +482,85 @@ function renderYear() {
   const totalWeeks = Math.ceil((firstDow + totalDays) / 7);
   const todayD = todayStr();
 
-  const weekMonth = [];
+  const gridEl = document.getElementById('yGrid');
+  const monthsEl = document.getElementById('yMonths');
+  const hoverLabel = document.getElementById('yHoverLabel');
+  gridEl.innerHTML = ''; monthsEl.innerHTML = '';
+
+  const isVertical = window.matchMedia('(max-width: 760px)').matches;
+  hoverLabel.innerHTML = isVertical ? 'Tap a day' : 'Hover or click a day';
+  gridEl.classList.toggle('year-heatmap-vertical', isVertical);
+
+  // One cell's worth of logic, shared by both orientations below so the desktop/mobile branches
+  // can't quietly drift apart from each other over time.
+  function buildDayCell(off) {
+    const cell = document.createElement('div');
+    if (off < 0 || off >= totalDays) {
+      cell.className = 'year-day';
+      cell.style.visibility = 'hidden';
+      return cell;
+    }
+    const dt = new Date(yearVal, 0, 1 + off);
+    const dateStr = dt.getFullYear() + '-' + pad(dt.getMonth() + 1) + '-' + pad(dt.getDate());
+    const log = byDate.get(dateStr);
+    const isDone = !!(log && log.done);
+    const hasNote = !!(log && log.note && log.note.trim());
+    const isFuture = dateStr > todayD;
+    cell.className = 'year-day' + (isFuture ? ' future' : '');
+    if (isDone) cell.style.background = habit.color;
+    if (hasNote) cell.innerHTML = '<span class="yd-note"></span>';
+    cell.title = ddmmyyyy(dateStr) + (isDone ? ' · done' : '');
+    // mouseenter is desktop-only, deliberately — this is the actual root cause of the "needs two
+    // taps to open on mobile" bug (cursor:pointer alone, tried last round, wasn't it). A
+    // mouseenter/mouseover listener bound to an element is exactly what makes iOS Safari treat a
+    // first tap as "enter hover state" and only fire the real click on a second tap — .cal-cell
+    // elsewhere never had this problem because it only ever had a click handler, no hover one.
+    // The hover label is pointless on a touch device anyway (nothing to hover before a tap), so
+    // skipping it there removes the trap instead of working around it.
+    if (!isVertical) cell.addEventListener('mouseenter', () => {
+      hoverLabel.innerHTML = `<span class="ymd">${ddmmyyyy(dateStr)}</span>${isDone ? ' · done' : ''}${hasNote ? ' · has a note' : ''}<a data-date="${dateStr}">view in month →</a>`;
+      hoverLabel.querySelector('a').addEventListener('click', (e) => { e.stopPropagation(); jumpToMonth(dateStr); });
+    });
+    if (!isFuture) cell.addEventListener('click', () => {
+      logDate = dateStr; // same day-nav sync as the month calendar's own day click
+      refreshLogRow();
+      openDayDetailModal(dateStr);
+    });
+    return cell;
+  }
+
+  let lastLabeled = -1;
   for (let w = 0; w < totalWeeks; w++) {
     let m = null;
     for (let d = 0; d < 7; d++) {
       const off = w * 7 + d - firstDow;
       if (off >= 0 && off < totalDays) { m = new Date(yearVal, 0, 1 + off).getMonth(); break; }
     }
-    weekMonth.push(m);
-  }
 
-  const gridEl = document.getElementById('yGrid');
-  const monthsEl = document.getElementById('yMonths');
-  const hoverLabel = document.getElementById('yHoverLabel');
-  gridEl.innerHTML = ''; monthsEl.innerHTML = '';
-  hoverLabel.innerHTML = 'Hover or click a day';
-  let lastLabeled = -1;
+    if (isVertical) {
+      const row = document.createElement('div');
+      row.className = 'year-week-row';
+      const label = document.createElement('span');
+      label.className = 'year-row-month-label';
+      if (m !== null && m !== lastLabeled) { label.textContent = MONTHS_SHORT[m]; lastLabeled = m; }
+      row.appendChild(label);
+      const daysWrap = document.createElement('div');
+      daysWrap.className = 'year-week-days';
+      for (let d = 0; d < 7; d++) daysWrap.appendChild(buildDayCell(w * 7 + d - firstDow));
+      row.appendChild(daysWrap);
+      gridEl.appendChild(row);
+    } else {
+      const col = document.createElement('div');
+      col.className = 'year-week';
+      for (let d = 0; d < 7; d++) col.appendChild(buildDayCell(w * 7 + d - firstDow));
+      gridEl.appendChild(col);
 
-  for (let w = 0; w < totalWeeks; w++) {
-    const col = document.createElement('div');
-    col.className = 'year-week';
-    for (let d = 0; d < 7; d++) {
-      const off = w * 7 + d - firstDow;
-      const cell = document.createElement('div');
-      if (off < 0 || off >= totalDays) {
-        cell.className = 'year-day';
-        cell.style.visibility = 'hidden';
-      } else {
-        const dt = new Date(yearVal, 0, 1 + off);
-        const dateStr = dt.getFullYear() + '-' + pad(dt.getMonth() + 1) + '-' + pad(dt.getDate());
-        const log = byDate.get(dateStr);
-        const isDone = !!(log && log.done);
-        const hasNote = !!(log && log.note && log.note.trim());
-        const isFuture = dateStr > todayD;
-        cell.className = 'year-day' + (isFuture ? ' future' : '');
-        if (isDone) cell.style.background = habit.color;
-        if (hasNote) cell.innerHTML = '<span class="yd-note"></span>';
-        cell.title = ddmmyyyy(dateStr) + (isDone ? ' · done' : '');
-        cell.addEventListener('mouseenter', () => {
-          hoverLabel.innerHTML = `<span class="ymd">${ddmmyyyy(dateStr)}</span>${isDone ? ' · done' : ''}${hasNote ? ' · has a note' : ''}<a data-date="${dateStr}">view in month →</a>`;
-          hoverLabel.querySelector('a').addEventListener('click', (e) => { e.stopPropagation(); jumpToMonth(dateStr); });
-        });
-        if (!isFuture) cell.addEventListener('click', () => {
-          logDate = dateStr; // same day-nav sync as the month calendar's own day click
-          refreshLogRow();
-          openDayDetailModal(dateStr);
-        });
-      }
-      col.appendChild(cell);
+      const label = document.createElement('span');
+      label.style.width = '11px';
+      label.style.fontSize = '9px';
+      if (m !== null && m !== lastLabeled) { label.textContent = MONTHS_SHORT[m]; lastLabeled = m; }
+      monthsEl.appendChild(label);
     }
-    gridEl.appendChild(col);
-
-    const label = document.createElement('span');
-    label.style.width = '11px';
-    label.style.fontSize = '9px';
-    if (weekMonth[w] !== null && weekMonth[w] !== lastLabeled) {
-      label.textContent = MONTHS_SHORT[weekMonth[w]];
-      lastLabeled = weekMonth[w];
-    }
-    monthsEl.appendChild(label);
   }
 }
 function jumpToMonth(dateStr) {

@@ -557,10 +557,29 @@ section.block{ scroll-margin-top: 24px; }
    box could be almost anywhere. Now this input is wrapped in its own small `.open-day-wrap`
    (position:relative, sized to just the button) and given explicit `inset:0`, so it always
    covers exactly the same box as its own button — no ambiguity, no dependency on flex's static-
-   position quirks. Still invisible/non-interactive itself (pointer-events:none, opacity:0) —
-   the 📅 button remains the only real control, calling .click() on this input from JS. */
+   position quirks.
+   Real root cause of the picker still never opening on iPhone, after several rounds of
+   showPicker()/.click() JS fallbacks: per the WHATWG thread that proposed showPicker() in the
+   first place (github.com/whatwg/html/issues/6909), a *synthetic* .click() dispatched from JS
+   isn't specified to trigger a browser's native picker UI at all — only a real, direct,
+   trusted tap on the input itself is guaranteed to. showPicker() covers the "trigger it from a
+   button" case on browsers that implement it (desktop Chrome/Firefox/Safari), but iOS Safari
+   doesn't implement showPicker() for date inputs at all (still-open WebKit bug), which is why
+   this always fell through to the .click() fallback specifically on iPhone — the one path that
+   was never actually guaranteed to work there. Fix: stop routing the tap through JS entirely.
+   This input is no longer pointer-events:none — it's the thing that actually receives the real
+   tap directly (stacked exactly on top of the 📅 button via `inset:0`, same box, later in the
+   DOM so it paints on top), so opening the picker is the browser's own default, guaranteed
+   behavior for a genuine click on a date input — nothing JS-triggered, nothing to be an
+   unimplemented no-op on iOS. Deliberately NOT setting pointer-events:auto explicitly — leaving
+   it unset lets it inherit normally, so `.nav-disabled`'s pointer-events:none (Select mode)
+   still correctly disables this too, the same as any other control in that group. The 📅
+   button's own click handler (openDatePicker() in app.js/habit-detail.js) is kept only as a
+   keyboard-accessibility fallback (Tab to the button, Enter/Space fires a real click there) —
+   real taps/clicks anywhere in this box now land on the input, not the button. */
 .open-day-wrap{ position: relative; display: inline-flex; }
-.open-day-picker{ position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; padding: 0; border: 0; opacity: 0; pointer-events: none; }
+.open-day-wrap:hover .open-day-btn{ color: var(--gold); border-color: var(--gold-dim); } /* real mouse hover now lands on the transparent input on top, not this sibling button directly — mirrored here so the existing hover color-change still shows */
+.open-day-picker{ position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; padding: 0; border: 0; opacity: 0; cursor: pointer; }
 
 .add-form{ display:flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; align-items:center; background: var(--bg-raised); border: 1px solid var(--line); padding: 12px; border-radius: var(--radius-m); }
 .add-form input, .add-form select{ background: var(--bg); border: 1px solid var(--line); color: var(--ink); padding: 8px 10px; border-radius: var(--radius-s); }
@@ -789,9 +808,20 @@ input[type=color].color-native{ width:22px; height:22px; padding:0; border:1px d
 .habit-row{ display:flex; align-items:center; gap:12px; background: var(--bg-raised); border: 1px solid var(--line); border-radius: var(--radius-s); padding: 9px 12px; width:100%; min-width:0; }
 .habit-row.done{ opacity: 0.5; }
 /* while hovering a logged habit, or while its metric/note is actually focused for editing,
-   drop the muting so it reads like any other (unlogged) row until you move on */
-.habit-row.done:hover,
+   drop the muting so it reads like any other (unlogged) row until you move on. The :hover half
+   is wrapped in (hover: hover) specifically — iOS Safari (and touchscreens generally) can treat
+   a tap as entering a "stuck" :hover state that only clears on the next tap elsewhere, which is
+   exactly what was reported: checking off a habit left that one row un-muted until tapping
+   somewhere else, while other rows muted immediately — the row you just tapped was the one
+   stuck in :hover. (hover: hover) only matches devices with a real, continuous pointer (a
+   mouse), so this un-mute-on-hover behavior — genuinely useful on desktop — simply doesn't
+   apply on a touchscreen, sticky or not. :focus-within is left unscoped; it's a real, separate,
+   keyboard-accessibility case (tabbing into a done row's note field) that iOS Safari's tap
+   behavior doesn't actually trigger for non-text controls like a checkbox in the first place. */
 .habit-row.done:focus-within{ opacity: 1; }
+@media (hover: hover) {
+  .habit-row.done:hover{ opacity: 1; }
+}
 .habit-row.dragging{ opacity: .35; }
 .habit-row .entry-drag-handle{ cursor:grab; }
 .habit-identity{ display:flex; align-items:center; gap:9px; text-decoration:none; color:inherit; flex-shrink: 0; width: 170px; min-width:0; }
@@ -844,7 +874,7 @@ input[type=color].color-native{ width:22px; height:22px; padding:0; border:1px d
 .cal-nav{ display:flex; align-items:center; gap:10px; margin-bottom:14px; font-family: var(--font-mono); }
 .cal-nav button{ background: var(--bg-raised); border:1px solid var(--line); color: var(--ink-dim); width:28px; height:28px; border-radius: var(--radius-s); cursor:pointer; }
 .cal-nav button:hover{ color: var(--gold); border-color: var(--gold-dim); }
-.cal-nav .cal-label{ font-size: 13px; min-width: 130px; }
+.cal-nav .cal-label{ font-size: 13px; min-width: 130px; text-align: center; }
 .cal-nav .cal-show-deleted-btn{ width: auto; height: 28px; padding: 0 10px; font-size: 11px; margin-left: auto; }
 .cal-nav .cal-show-deleted-btn.active{ color: var(--gold); border-color: var(--gold-dim); }
 
@@ -856,7 +886,13 @@ input[type=color].color-native{ width:22px; height:22px; padding:0; border:1px d
 .legend-hard-del:hover{ color: var(--rust); text-decoration-color: var(--rust); }
 .cal-legend .sw{ width:9px; height:9px; border-radius:50%; flex-shrink:0; }
 
-.cal-grid{ display:grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+.cal-grid{ display:grid; grid-template-columns: repeat(7, var(--cal-cell-size, 1fr)); gap: 6px; } /* --cal-cell-size is set by
+  renderCalGrid() (app.js) only when a month's busiest day needs more room than the natural 1fr
+  column gives — falls back to plain 1fr, unchanged, the rest of the time. Widening the column
+  this way (rather than one cell's own width) keeps every cell in the grid the same uniform size,
+  so a busy day's cell grows as a true square, not a distorted one-off rectangle. #mCalGrid
+  (habit-detail's month view) never sets this property, so it's always the plain 1fr fallback
+  there — consistent with that view never having this problem to begin with. */
 .cal-dow{ font-family: var(--font-mono); font-size: 10px; color: var(--ink-faint); text-align:center; padding-bottom: 4px; }
 .cal-cell{ aspect-ratio: 1/1; border: 1px solid var(--line); border-radius: 7px; background: var(--bg-raised); padding: 5px; cursor:pointer; display:flex; flex-direction:column; justify-content: space-between; }
 .cal-cell:hover{ border-color: var(--gold-dim); }
@@ -877,10 +913,23 @@ input[type=color].color-native{ width:22px; height:22px; padding:0; border:1px d
 
 /* ---------- habit detail page ---------- */
 
+/* Habit-detail page: sticky back-button row. The habit name only fades in once actually
+   scrolled (.is-stuck, toggled by nav.js's existing shared sticky-head observer) — while at the
+   top the real name is already right there in .habit-detail-hero below, so showing it twice
+   would just take up space for nothing. */
+.habit-sticky-row{ display:flex; align-items:center; gap:14px; min-width:0; }
+.habit-sticky-name{ font-family: var(--font-display); font-weight:600; font-size:16px; color:var(--ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; opacity:0; transform:translateY(-2px); transition: opacity .15s ease, transform .15s ease; }
+.page-head.sticky-head.is-stuck .habit-sticky-name{ opacity:1; transform:translateY(0); }
+/* Not sticky — cycles to the adjacent habit (in the same order as the Habits list/Today page),
+   sitting between the sticky back-button row and the full habit-name hero below it. Hidden
+   entirely when there's nothing to cycle to (see habit-detail.js). */
+.habit-prevnext-row{ display:flex; justify-content:space-between; gap:10px; margin: 0 0 18px; }
+
 .habit-detail-hero{ display:flex; align-items:center; gap:16px; margin-bottom: 28px; flex-wrap:wrap; }
 .habit-detail-hero .badge{ width:56px; height:56px; border-radius:16px; display:flex; align-items:center; justify-content:center; font-size:26px; border:1px solid var(--line); flex-shrink:0; }
 .habit-detail-hero h1{ font-family: var(--font-display); font-size:26px; margin:0; }
 .habit-detail-hero .stats{ font-family: var(--font-mono); font-size:12px; color: var(--ink-dim); margin-top:4px; }
+.habit-detail-hero .stats .stat-point{ white-space: nowrap; } /* keeps e.g. "since 05-09-2025" together as one unit when the line wraps, instead of splitting mid-phrase — see habit-detail.js renderHero() */
 .habit-detail-actions{ margin: 24px 0 30px; display:flex; gap:8px; justify-content:flex-end; }
 .habit-detail-actions .danger{ background:transparent; border:1px solid var(--rust); color: var(--rust); padding:8px 14px; border-radius: var(--radius-s); cursor:pointer; font-size: 12.5px; }
 .habit-detail-actions .danger:hover{ background: rgba(181,80,45,0.1); }
@@ -909,12 +958,36 @@ input[type=color].color-native{ width:22px; height:22px; padding:0; border:1px d
 
 .year-heatmap-wrap{ overflow-x:auto; padding-bottom: 8px; }
 .year-months{ display:flex; gap:3px; font-family: var(--font-mono); font-size:9.5px; color: var(--ink-faint); margin-bottom:4px; margin-left: 18px; }
+.year-grid-row{ display:flex; } /* wraps dow-labels + the heatmap itself — was an inline style on this div, moved into the stylesheet so the mobile override below has a normal selector to target */
 .year-heatmap{ display:flex; gap:3px; }
 .year-dow-labels{ display:flex; flex-direction:column; gap:3px; margin-right:4px; font-family: var(--font-mono); font-size: 8.5px; color: var(--ink-faint); }
 .year-dow-labels span{ height:11px; line-height:11px; }
+/* Horizontal Sun–Sat header, mobile-only counterpart to .year-dow-labels above (which is a
+   vertical sidebar — correct for desktop's weeks-as-columns layout, but doesn't apply once the
+   grid rotates to weeks-as-rows on mobile, see .year-heatmap-vertical below). Hidden here,
+   switched on inside the 760px mobile block. */
+/* ---------- year heatmap: mobile Sun–Sat header row (desktop uses the vertical Mon/Wed/Fri sidebar instead, see .year-dow-labels) ---------- */
+.year-dow-header{ display:none; gap:4px; margin-bottom:4px; font-family: var(--font-mono); font-size:11px; color: var(--ink-faint); } /* only ever
+  shown on mobile (display:flex override below) — font-size bumped 9px → 11px directly here,
+  safe since desktop never renders this element at all */
+.year-dow-header .ydow-cell{ width:16px; text-align:center; } /* .ydow-cell, not a blanket `span`
+  — the header's first child is .year-row-month-label (an invisible spacer reused from the
+  week-rows below, for alignment — see habit.html), which needs its OWN 26px width from that
+  class; a blanket `span` selector here was overriding it with 16px (specificity: element+class
+  beats class alone), quietly breaking the alignment between header and grid by a few px */
 .year-week{ display:flex; flex-direction:column; gap:3px; }
-.year-day{ width:11px; height:11px; border-radius:3px; background: var(--bg-raised-2); border:1px solid var(--line); }
+.year-day{ width:11px; height:11px; border-radius:3px; background: var(--bg-raised-2); border:1px solid var(--line); cursor: pointer; } /* cursor:pointer isn't just cosmetic here — a plain <div> with only a JS click handler and no cursor style is exactly the shape of element that needs 2 taps to register a click on iOS Safari (first tap registers as a hover-equivalent, second as the actual click); .cal-cell elsewhere already had this and never had the problem, which is what pointed at it here */
 .year-day.future{ opacity: .3; }
+/* Mobile-only rotated layout for the year heatmap — see habit-detail.js renderYear(). The
+   desktop grid (weeks as 53 columns, left to right across the year) is exactly what forced the
+   horizontal overflow/scrolling on a portrait phone reported repeatedly; rather than just making
+   that scroll more gracefully, the grid itself rotates on mobile — weeks become rows (stacked
+   top to bottom), days become the 7 columns within each row — which fits a phone's width with
+   no scrolling needed at all, since normal page-scroll already handles a tall, narrow grid. */
+.year-heatmap.year-heatmap-vertical{ flex-direction: column; gap:4px; }
+.year-week-row{ display:flex; align-items:center; gap:6px; }
+.year-row-month-label{ width:26px; flex-shrink:0; text-align:right; font-family: var(--font-mono); font-size:9.5px; color: var(--ink-faint); }
+.year-week-days{ display:flex; gap:4px; }
 
 .habit-log-feed{ margin-top: 10px; }
 .habit-log-feed .search-row .sr-date{
@@ -1011,6 +1084,9 @@ input[type=color].color-native{ width:22px; height:22px; padding:0; border:1px d
   width: 9px; height: 9px; border-radius: 50%;
   background: #fff; border: 1.5px solid var(--bg-raised);
 }
+:root.light-theme .cal-cell .note-dot{ border-color: rgba(43,39,24,.55); } /* var(--bg-raised) is
+  itself near-white in light mode, so the border was invisible there — a thin dark ring instead,
+  so the dot still reads against a light cell background */
 
 /* ---------- all-habits calendar: bigger dots + legend (index.html) ---------- */
 .cal-legend.big .li{ font-size: 13px; gap: 8px; }
@@ -1024,6 +1100,8 @@ input[type=color].color-native{ width:22px; height:22px; padding:0; border:1px d
   position: absolute; top: -2px; right: -2px; width: 5px; height: 5px; border-radius: 50%;
   background: #fff; border: 1px solid var(--bg-raised);
 }
+:root.light-theme .year-day .yd-note{ border-color: rgba(43,39,24,.55); } /* same fix as
+  .note-dot above — var(--bg-raised) is itself near-white in light mode, invisible as a border */
 .year-hover-label{
   font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-dim); margin-bottom: 8px; min-height: 16px;
 }
@@ -1140,6 +1218,8 @@ input[type=color].color-native{ width:22px; height:22px; padding:0; border:1px d
 
 /* ---------- day list backward/forward nav shared with habits ---------- */
 .day-nav .next-disabled{ opacity: .3; cursor: default; pointer-events: none; }
+.cal-nav .next-disabled{ opacity: .3; cursor: default; pointer-events: none; } /* same treatment, for #calNext — habit-section month nav now stops at the current month */
+.year-nav .next-disabled{ opacity: .3; cursor: default; pointer-events: none; } /* same again, for #yNext — habit-detail's year heatmap now stops at the current year */
 
 
 /* ---------- collapsible toolbars (New Habit / Search toggles) ---------- */
@@ -1386,7 +1466,15 @@ input[type=color].color-native{ width:22px; height:22px; padding:0; border:1px d
   .shell.backup-panel-open .mobile-backup-panel{ display: flex; }
   .mobile-backup-panel .ghost-btn{ white-space: nowrap; }
 
-  .main{ padding: 24px 20px calc(150px + env(safe-area-inset-bottom)); max-width: 100%; } /* was
+  /* max-width:100vw, not 100%, matters a lot more than it looks — see the calendar-grid
+     comments further down for the full story, but short version: a percentage max-width on
+     .main can get inflated by a deeply-nested descendant's own intrinsic content size (proven
+     by testing — a fixed-width grid inside the Habit Tracker calendar was pushing .main to
+     454px on a 390px phone, entirely silently, no visual overflow warning of any kind). vw is
+     resolved directly against the viewport, immune to that regardless of what's nested inside
+     .main — this is what actually makes any "let a deeply-nested element scroll horizontally
+     instead of overflowing" fix downstream of .main reliable at all. */
+  .main{ padding: 24px 20px calc(150px + env(safe-area-inset-bottom)); max-width: 100vw; } /* was
     130px — barely cleared the floating buttons' own top edge with no breathing room; this
     applies to every page (.main is the shared content wrapper), not just Today */
   /* Flow's timer + controls need extra clearance beyond the general page padding above — it's
@@ -1396,6 +1484,10 @@ input[type=color].color-native{ width:22px; height:22px; padding:0; border:1px d
   /* the add-habit popup's color swatches were forced flex-wrap:nowrap for desktop's wider modal
      — on a phone-width modal that just pushed the row off the edge instead of wrapping */
   .habit-add-modal .color-picker{ flex-wrap: wrap; width: auto; }
+  /* Same fix, same reason, for the habit-detail page's own Edit form — .edit-row-icon-color's
+     desktop rule also forces nowrap, which on mobile just let the extra swatches run off the
+     edge instead of wrapping to a second row. */
+  .edit-row-icon-color .color-picker{ flex-wrap: wrap; max-width: none; }
 
   /* Today page's inline add-habit form: emoji picker previously got its own "open to the side"
      treatment here (mirroring the Habits-page modal's popup), but on a phone the panel could
@@ -1434,12 +1526,51 @@ input[type=color].color-native{ width:22px; height:22px; padding:0; border:1px d
   .flow-layout{ flex-direction: column-reverse; gap: 28px; align-items: center; }
   .flow-tasks-panel{ width: 100%; padding-top: 0; }
 
-  /* .current-date's 236px fixed desktop width (sized for the longest possible date string) was
-     the single biggest source of the "everything is a bit too wide" mobile overflow — that alone
-     could exceed a phone's viewport before anything else in the row was even accounted for */
-  .day-nav .current-date{ width: auto; min-width: 0; font-size: 12px; }
-  .day-nav{ flex-wrap: wrap; gap: 8px; }
-  .day-nav-dategroup{ flex-wrap: wrap; row-gap: 6px; gap: 6px; }
+  /* Fixed width now, not auto — on mobile this used to resize with whatever date string was
+     showing (no prefix for a plain date vs "Today · "/"Yest · "/"Tom · " for the three special
+     cases), which visibly shifted every button after it (next-day, today, the 📅 date-picker)
+     left and right as you navigated. 24ch covers the longest real case exactly ("Today · Wed, 25
+     Sep 2026" is 24 characters) if the font renders as a truly perfect monospace — but the font
+     here (IBM Plex Mono) is self-hosted, and its "ch" (the width of its "0" glyph) doesn't
+     necessarily match every OTHER character's advance width to the sub-pixel, especially
+     punctuation like "·" and ",". That's exactly what truncated "2026" down to "202" — a few
+     px short, not 4-5 characters' worth. calc(24ch + 10px) fixed the truncation, but then made
+     the row too wide — the 📅 date-picker button started wrapping to a second line, which is its
+     own problem. Narrowed to calc(24ch + 5px), then narrower still to calc(24ch + 2px) on
+     further feedback that even +5px still read as a bit much: still a font-relative estimate
+     with a small fixed buffer on top (not a guessed flat px value, and not trying to chase an
+     exact character count down to the pixel), just the smallest buffer that still clears the
+     truncation — verified against a real rendered page each time this number changed. flex-shrink:0
+     stops the wrapping flex row above from still nibbling at its width under pressure — it and
+     everything after it now sit at one fixed spot regardless of which date or page this is.
+     Covers Day List, Habit Tracker (Today page), and the habit-detail page's own day-nav in one
+     rule, all three share this same .current-date class. */
+  .day-nav .current-date{ width: calc(24ch + 1px); min-width: 0; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
+
+  /* .journal-save-hint intentionally has NO mobile override — the "way bigger" anomaly reported
+     was never really about this element's own font-size; it was the .main containment bug (see
+     the #calGrid comments below). With that fixed, this just inherits the base 10.5px like
+     everything else, no special-casing needed here at all. */
+
+  /* Habit Tracker calendar (Today page, #calGrid — NOT habit-detail's #mCalGrid, which only ever
+     shows one mark per day and never needed this). Round 41: transposed on mobile — weekdays
+     become a sticky leading column, weeks become columns that scroll/pinch-zoom horizontally,
+     instead of a busy day growing every row (and the whole page) taller. Built in app.js as
+     nested flex columns (one per week, each a fixed 7-cell stack) rather than a CSS-grid
+     transpose — a grid-auto-flow:column version positioned cells correctly but Chromium sized
+     the grid container's own auto height shorter than its actual row tracks once aspect-ratio
+     and an implicit custom-property column were both involved, clipping the bottom rows. Flex's
+     cross-axis "tallest child" sizing doesn't have that problem. */
+  #calGrid.cal-grid-mobile{
+    display: flex; align-items: flex-start; gap: 6px;
+    overflow-x: auto; -webkit-overflow-scrolling: touch; padding-bottom: 6px;
+  }
+  .cal-week-col{ display: flex; flex-direction: column; gap: 6px; flex: 0 0 var(--cal-cell-size, 44px); }
+  .cal-week-col-labels{ position: sticky; left: 0; z-index: 2; background: var(--bg); flex-basis: 22px; border-right: 1px solid var(--line); }
+  #calGrid.cal-grid-mobile .cal-dow, #calGrid.cal-grid-mobile .cal-cell{ flex: 0 0 var(--cal-cell-size, 44px); width: 100%; }
+  #calGrid.cal-grid-mobile .cal-dow{ display: flex; align-items: center; justify-content: center; padding: 0; }
+  .day-nav{ flex-wrap: wrap; gap: 4px; row-gap: 6px; }
+  .day-nav-dategroup{ flex-wrap: wrap; row-gap: 6px; gap: 2px; }
   /* Slightly larger than even the desktop base (30px) — phone touch targets benefit from a bit
      more room than the space freed up by the Yest/Tom abbreviation above would otherwise sit
      unused, and 27px (the previous mobile size) ran a bit small for a reliable tap. */
@@ -1596,7 +1727,10 @@ input[type=color].color-native{ width:22px; height:22px; padding:0; border:1px d
      which left no room for text-align to do anything), name itself stays left-aligned/normal
      reading order, only the secondary stats line shifts right. */
   .habit-hero-text{ flex: 1; min-width: 0; }
-  .habit-hero-text .stats{ text-align: right; }
+  /* Reverted from Round 23's right-align, per request — left-aligned like the other stat-style
+     rows on this page (e.g. Habits-list's own hl-insights), and paired with .stat-point (above)
+     so a wrapped line breaks between stat points instead of mid-phrase. */
+  .habit-hero-text .stats{ text-align: left; }
   /* Real bug found: .sticky-head never had a mobile override at all — it was using its desktop
      padding (16px top, 48px sides) and matching -48px negative side-margins completely
      unchanged on a phone, where .main's own padding is 20px, not 48px (a mismatch that likely
@@ -1622,6 +1756,67 @@ input[type=color].color-native{ width:22px; height:22px; padding:0; border:1px d
      right-aligned again on mobile (see above): give the row somewhere to wrap to instead of
      overflowing, the same class of bug as the sidebar/.current-date overflow fixed elsewhere. */
   .tabs{ flex-wrap: wrap; row-gap: 8px; }
+
+  /* Year heatmap (habit-detail page) — rotated to weeks-as-rows on mobile, see the base
+     .year-heatmap-vertical rule above and habit-detail.js's renderYear() for the structural
+     change. The desktop-only pieces (the top month-label row, the vertical Mon/Wed/Fri sidebar,
+     and the wrapper's own horizontal scrollbar) are switched off here; the rotated grid needs
+     none of them — a horizontal Sun–Sat header takes the sidebar's place instead. */
+  .year-heatmap-wrap{ overflow-x: visible; padding-bottom: 0; }
+  .year-months{ display:none; }
+  .year-dow-labels{ display:none; }
+  /* Centered as a block, not just left-flush — the whole point of the leading spacer span
+     (matching .year-row-month-label's width, added in habit.html) is so the header's content
+     has the exact same total width as each week-row below it (label-width + gap + 7 cells +
+     their gaps); centering both independently (same width in each) still lines them up. Old
+     margin-left:32px hack removed — it was a fixed offset from the left edge, which doesn't
+     center, it just shifts.
+     transform:translateX(-16px), not margin-left — centering the *whole* block (spacer + 7
+     columns) puts the middle of that whole block at true center, but the spacer only sits on
+     the left, so the visible 7-column part (the part that actually reads as "the grid" to a
+     person looking at it) ends up sitting exactly half the spacer's width — 16px, half of 32px —
+     right of true center. A first attempt shifted this with margin-left:-16px, but verified
+     testing showed that only moved the visible columns half as far as intended (8px, not 16) —
+     a negative margin on a width:auto flex box doesn't just reposition it, it also *grows* the
+     box's own computed width by the same amount (per the standard block-width formula), and
+     justify-content:center then re-centers within that now-wider box, diluting the correction by
+     half. transform doesn't touch box-model width at all, so the full -16px repositioning
+     actually lands — confirmed pixel-exact (block center and visible-column center both measured
+     at the same x) against a real rendered page. */
+  .year-dow-header{ display:flex; gap:6px; justify-content:center; transform: translateX(-16px); }
+  .year-dow-header .ydow-cell{ width:32px; }
+  .year-grid-row{ justify-content:center; transform: translateX(-16px); }
+  /* Cells bumped once more (28px → 32px) per request. Gaps left at 6px; the row-label column
+     (26px) + its own 6px gap match the header spacer above, so alignment holds regardless of
+     exact cell size (both sides scale together). */
+  .year-day{ width:32px; height:32px; }
+  /* "Has a note" indicator dot — bigger to match the now much-larger (32px, was 11px on desktop)
+     cells; base rule's 5px was sized for that original desktop scale. */
+  .year-day .yd-note{ width: 9px; height: 9px; top: -3px; right: -3px; }
+  /* Month label ("Jan", "Feb"...) at the start of a week-row a new month begins in — bigger,
+     matching the cells around it; base rule's 9.5px was also sized for the small desktop cells. */
+  .year-row-month-label{ font-size: 12px; }
+  /* Year label in the year-nav (prev ‹ 2026 › next) — centered within its own reserved width
+     instead of left-aligned, so it visually centers between the two arrow buttons either side. */
+  .year-nav .year-label{ text-align: center; }
+  .year-heatmap.year-heatmap-vertical{ gap:6px; }
+  .year-week-days{ gap:6px; }
+
+  /* Month/Year tab row (habit-detail page only — scoped via #calTabs so this doesn't touch the
+     Today page's own Today/Calendar .tabs, a separate use of the same class): centered, with
+     Month on the left and Year on the right (i.e. plain DOM order — no order override needed;
+     the previous round's right-align + Month-at-the-far-right was a different, since-reversed
+     request). */
+  #calTabs{ justify-content: center; }
+
+  /* Month-view's own nav (prev/label/next) and the Year-view nav — centered instead of left,
+     per request. #mCalNav scopes this to habit-detail's Month view specifically; the Today
+     page's Calendar tab reuses the plain .cal-nav class but also carries a "Show deleted"
+     button pinned right via margin-left:auto, which centering here would fight with, so that
+     one is deliberately left untouched. .year-nav is only ever used on this page, safe to
+     target directly. */
+  #mCalNav{ justify-content: center; }
+  .year-nav{ justify-content: center; }
 
   /* Journal grid: 2 cards per row instead of 3 — 3 across was too tight to read on a phone */
   .journal-grid{ grid-template-columns: repeat(2, 1fr); }

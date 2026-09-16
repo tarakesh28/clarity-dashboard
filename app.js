@@ -241,6 +241,12 @@ let chronoCollapsed = localStorage.getItem('mm_chronoCollapsed') === '1';
 
 function renderDayNav() {
   document.getElementById('currentDateLabel').textContent = friendlyDate(currentDate, true);
+  // Keeps the hidden date input's value synced to whatever day is actually showing, on every
+  // render — not just inside the 📅 button's own click handler. Now that a real tap lands
+  // directly on this input (see .open-day-picker in styles.css), the button's click handler
+  // often never runs at all, so this can't be the only place the value gets set anymore, or the
+  // picker would open pre-selected to whatever it was last left showing instead of today's view.
+  document.getElementById('dayOpenPicker').value = currentDate;
 }
 function refreshDay() {
   // Re-run the recurring-task top-up on every refresh (not just page load) — closes the gap
@@ -886,6 +892,10 @@ function renderHabitDayNav() {
   // "picker doesn't open on iOS" report (Day List's equivalent button, which has no such
   // attribute to set, was never reported broken), so the handler below now only sets .value and
   // calls showPicker(), matching that already-working pattern exactly.
+  // Same reasoning as renderDayNav()'s dayOpenPicker sync above — kept in step with
+  // habitLogDate on every render now that a real tap goes straight to this input, bypassing the
+  // click handler that used to be the only place .value got set.
+  document.getElementById('habitOpenPicker').value = habitLogDate;
 }
 document.getElementById('habitPrev').addEventListener('click', () => { habitLogDate = addDays(habitLogDate, -1); renderHabitDayNav(); renderHabitToday(); });
 document.getElementById('habitNext').addEventListener('click', () => {
@@ -1263,15 +1273,18 @@ function renderCalDetail(dateStr) {
 function renderCalGrid() {
   const grid = document.getElementById('calGrid');
   grid.innerHTML = '';
-  DOW.forEach(d => { const el = document.createElement('div'); el.className = 'cal-dow'; el.textContent = d[0]; grid.appendChild(el); });
+  grid.style.removeProperty('--cal-cell-size');
   const year = calMonth.getFullYear(), month = calMonth.getMonth();
   const firstDow = new Date(year, month, 1).getDay();
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   const habits = calHabits();
   const logs = Data.getHabitLogs().filter(l => l.done);
   const today = todayStr();
-  for (let i = 0; i < firstDow; i++) { const el = document.createElement('div'); el.className = 'cal-cell empty'; grid.appendChild(el); }
-  for (let day = 1; day <= daysInMonth; day++) {
+  const mobile = window.matchMedia('(max-width: 760px)').matches;
+
+  function makeDowCell(letter) { const el = document.createElement('div'); el.className = 'cal-dow'; el.textContent = letter; return el; }
+  function makeEmptyCell() { const el = document.createElement('div'); el.className = 'cal-cell empty'; return el; }
+  function makeDayCell(day) {
     const dateStr = year + '-' + pad(month + 1) + '-' + pad(day);
     const cell = document.createElement('div');
     cell.className = 'cal-cell' + (dateStr === today ? ' today' : '') + (dateStr === calSelectedDate ? ' selected' : '');
@@ -1288,12 +1301,92 @@ function renderCalGrid() {
       renderCalGrid();
       renderCalDetail(dateStr);
     });
-    grid.appendChild(cell);
+    return { cell, dayLogs };
+  }
+
+  let busiestCell = null, maxDots = -1;
+
+  if (!mobile) {
+    // Desktop/tablet: unchanged from how this always worked — a flat 7-column grid (days of the
+    // week as columns), weeks stacking downward as rows.
+    DOW.forEach(d => grid.appendChild(makeDowCell(d[0])));
+    for (let i = 0; i < firstDow; i++) grid.appendChild(makeEmptyCell());
+    for (let day = 1; day <= daysInMonth; day++) {
+      const { cell, dayLogs } = makeDayCell(day);
+      grid.appendChild(cell);
+      if (dayLogs.length > maxDots) { maxDots = dayLogs.length; busiestCell = cell; }
+    }
+  } else {
+    // Mobile: transposed — weekdays become a sticky leading column, weeks become columns that
+    // scroll (and pinch-zoom, see the touch handler below) horizontally instead of every row
+    // growing the whole page taller on a busy month. Built as one flex column per week (each a
+    // fixed 7-cell stack) rather than reshaping the same flat grid with grid-auto-flow:column —
+    // that CSS-only version positioned every cell correctly, but Chromium (going by how
+    // fundamental the mismatch was, quite possibly Safari too) computed the grid container's own
+    // auto height shorter than the sum of its own row tracks once aspect-ratio and an implicit,
+    // custom-property-sized column were both in play, silently clipping the bottom rows —
+    // reintroducing the exact vertical cut-off this whole change was meant to fix. Nested flex
+    // columns size on the much more ordinary "tallest child" cross-axis calculation instead, with
+    // no aspect-ratio or auto-track-sizing involved anywhere.
+    grid.classList.add('cal-grid-mobile');
+    const labelCol = document.createElement('div');
+    labelCol.className = 'cal-week-col cal-week-col-labels';
+    DOW.forEach(d => labelCol.appendChild(makeDowCell(d[0])));
+    grid.appendChild(labelCol);
+    let day = 1, weeksCount = 0, firstWeek = true;
+    while (day <= daysInMonth) {
+      const weekCol = document.createElement('div');
+      weekCol.className = 'cal-week-col';
+      const startPad = firstWeek ? firstDow : 0;
+      for (let i = 0; i < startPad; i++) weekCol.appendChild(makeEmptyCell());
+      for (let i = startPad; i < 7 && day <= daysInMonth; i++, day++) {
+        const { cell, dayLogs } = makeDayCell(day);
+        weekCol.appendChild(cell);
+        if (dayLogs.length > maxDots) { maxDots = dayLogs.length; busiestCell = cell; }
+      }
+      grid.appendChild(weekCol);
+      firstWeek = false; weeksCount++;
+    }
+    // Default cell size: divide the width actually available (not a CSS 1fr guess) evenly across
+    // however many week-columns this specific month needs, so a light month still fills the
+    // screen nicely by default — same starting point the growth/zoom logic below then builds on.
+    const gap = 6, labelWidth = labelCol.getBoundingClientRect().width || 22;
+    const availForWeeks = grid.clientWidth - labelWidth - gap;
+    const natural = Math.max(38, Math.floor((availForWeeks - (weeksCount - 1) * gap) / weeksCount));
+    grid.style.setProperty('--cal-cell-size', natural + 'px');
+  }
+
+  // Grows every cell uniformly, both width and height together (via --cal-cell-size, which both
+  // the desktop .cal-grid column width and the mobile .cal-week-col width above read from), once
+  // the busiest day this month needs more room than its current size gives it — a busy cell stays
+  // a true square instead of a width-fixed, only-taller rectangle. Measured directly against the
+  // real rendered busiest cell — nudging the shared size a step at a time until that cell's own
+  // height stops exceeding its width — rather than computed from a formula guessing at this
+  // cell's padding, line-height, gap, etc. from outside; much less fragile than trying to
+  // hand-keep a formula in sync with the actual CSS, and self-corrects if any of that ever
+  // changes.
+  if (busiestCell && maxDots > 0) {
+    let guard = 0;
+    while (guard++ < 25) {
+      const rect = busiestCell.getBoundingClientRect();
+      if (rect.height <= rect.width + 1) break; // square enough
+      const current = parseFloat(getComputedStyle(grid).getPropertyValue('--cal-cell-size')) || rect.width;
+      grid.style.setProperty('--cal-cell-size', (current + 4) + 'px');
+    }
   }
 }
+
 function renderCalendar() {
   renderCalLegend();
   document.getElementById('calLabel').textContent = MONTHS[calMonth.getMonth()] + ' ' + calMonth.getFullYear();
+  // Habit logging doesn't allow future days at all (see habitNext's own atToday guard above) —
+  // matches that same limit at the month level: can't navigate the calendar past the current
+  // month either, since there's nothing to show there.
+  const nextBtn = document.getElementById('calNext');
+  const now = new Date();
+  const atCurrentMonth = calMonth.getFullYear() === now.getFullYear() && calMonth.getMonth() === now.getMonth();
+  nextBtn.disabled = atCurrentMonth;
+  nextBtn.classList.toggle('next-disabled', atCurrentMonth);
   renderCalGrid();
   if (calSelectedDate) renderCalDetail(calSelectedDate);
 }

@@ -200,20 +200,23 @@ const Bgm = (() => {
   const POS_KEY = 'mm_bgmPosition';
   let audio = null;
 
+  // Tracks whether THIS page's audio object has actually reached the 'playing' event at least
+  // once. Guards savePosition() below — see the comment there for the bug this closes.
+  let hasPlayedOnce = false;
+
   function isOn() { return localStorage.getItem(ON_KEY) === 'true'; }
   function savedPosition() { return parseFloat(localStorage.getItem(POS_KEY) || '0') || 0; }
-  function savePosition() { if (audio) localStorage.setItem(POS_KEY, String(audio.currentTime)); }
-
-  // Setting .currentTime immediately after `new Audio()` — before the browser has actually
-  // loaded metadata (readyState 0, HAVE_NOTHING) — is unreliable on mobile: the seek can be
-  // silently dropped/reset once metadata does load a moment later, which is what was causing
-  // BGM to restart from 0 on every navigation instead of resuming. Desktop Chrome's faster,
-  // more eager media pipeline usually has metadata ready near-instantly, masking this there.
-  function seekTo(a, time) {
-    if (a.readyState >= 1) { a.currentTime = time; return; }
-    const onMeta = () => { a.currentTime = time; a.removeEventListener('loadedmetadata', onMeta); };
-    a.addEventListener('loadedmetadata', onMeta);
-  }
+  // Real remaining source of "restarts from the beginning, sometimes after coming back to a
+  // previous page": a brand-new page's <audio> element starts at currentTime 0 and stays there
+  // until the 'playing' event actually fires (see playFromSaved below) — genuinely correct while
+  // waiting on that. But if the page is left again (pagehide, tab-hide, or the 3s interval below)
+  // BEFORE 'playing' has fired yet — e.g. a quick back-and-forth, or just navigating away fast —
+  // this used to blindly persist that still-0 currentTime, overwriting the last known-good saved
+  // position with 0. Every subsequent page load would then correctly resume from 0, exactly
+  // matching the "restarts from the beginning" report, and "sometimes" because it only bites on
+  // a fast round trip, not a normal-paced one. Guarded now: never overwrite the saved position
+  // until this page's own audio has actually reached 'playing' for real at least once.
+  function savePosition() { if (audio && hasPlayedOnce) localStorage.setItem(POS_KEY, String(audio.currentTime)); }
 
   function ensureAudio() {
     if (audio) return audio;
@@ -226,23 +229,31 @@ const Bgm = (() => {
     // the CSS uses, rather than continuously — this volume doesn't need to react to a live
     // resize the way layout does.
     audio.volume = window.matchMedia('(max-width: 760px)').matches ? 0.325 : 0.5;
+    // Marks this page's audio as having genuinely started at least once — see savePosition()
+    // above for why this gate exists. Attached once here (not inside playFromSaved, which can
+    // run more than once per page) so it's a simple one-way flag for this audio object's whole
+    // lifetime on this page.
+    audio.addEventListener('playing', () => { hasPlayedOnce = true; });
     // keep the saved position reasonably fresh while actually playing, and catch the exact
     // spot on tab-hide/navigate/close — this is what lets the NEXT page load pick up close to here
     setInterval(() => { if (!audio.paused) savePosition(); }, 3000);
     window.addEventListener('pagehide', savePosition);
     // Backgrounding (switching apps, locking the phone, minimizing) now pauses BGM outright —
     // requested explicitly, rather than just letting it keep playing silently/audibly in the
-    // background. Foregrounding again resumes it automatically, but only if `isOn()` is still
-    // true — that check is what keeps this from re-starting music the user had actually paused
-    // themselves (via the toggle button) before backgrounding, as opposed to music this code
-    // paused on their behalf just because the tab went out of view.
+    // background. pause() called first, before savePosition() — a backgrounding pause reads as
+    // "slightly slow" on iOS, and while most of that gap is iOS itself deciding when to actually
+    // deliver this event (not something a page's own JS can speed up), this at least makes sure
+    // the code's own side of it isn't adding anything on top: the actual stop command runs
+    // before any other work, not after. Foregrounding again resumes it automatically, but only
+    // if `isOn()` is still true — that check is what keeps this from re-starting music the user
+    // had actually paused themselves (via the toggle button) before backgrounding, as opposed to
+    // music this code paused on their behalf just because the tab went out of view.
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) {
-        savePosition();
         if (!audio.paused) audio.pause();
+        savePosition();
       } else if (isOn() && audio.paused) {
-        seekTo(audio, savedPosition());
-        audio.play().catch(() => {});
+        playFromSaved(audio);
       }
       updateButton();
     });
@@ -257,14 +268,43 @@ const Bgm = (() => {
     btn.title = on ? 'Pause background music' : 'Play background music';
   }
 
-  function tryResume() {
-    const a = ensureAudio();
-    seekTo(a, savedPosition());
+  // Real root cause of "restarts from the beginning on every navigation": on GitHub Pages this
+  // traced to seekTo() and play() effectively racing (fixed below by no longer gating play() on
+  // metadata at all). But gating play() on a *pre-play* seek turned out to trade that bug for a
+  // different, iOS-specific one — reported back on `npx`+iPhone once this shipped, where BGM
+  // used to resume correctly and now didn't. iOS Safari has a documented quirk where
+  // `currentTime` set *before* playback has genuinely begun doesn't reliably stick — audio can
+  // silently start from 0 regardless of what was set beforehand, loadedmetadata or not. The
+  // fix documented for that quirk is the opposite ordering: seek *after* playback has actually
+  // started, not before. 'playing' fires the instant real audio output begins, from whichever
+  // play() attempt caused it (the immediate one below, or the blocked-autoplay retry) —
+  // reasserting the position right then is imperceptible, since nothing audible has reached the
+  // speaker yet regardless of how early play() was technically called. This also *better*
+  // addresses the original GitHub Pages symptom than gating play() on metadata did: 'playing'
+  // fires at the actual moment sound could first be heard, whatever the network took to get
+  // there, rather than at a fixed, guessed readyState checkpoint. Same function covers the
+  // resume path, the manual toggle-on path, and the visibility-driven auto-resume path.
+  function playFromSaved(a) {
+    const target = savedPosition();
+    // Round 40 tried muting until the 'playing' listener below confirms/corrects position, to
+    // close the "hear an instant of the true beginning before a correction cuts in" artifact —
+    // but unmuting programmatically like that, with no user gesture backing it, is exactly the
+    // pattern Chromium's autoplay-policy safeguards watch for (muted autoplay is always allowed;
+    // silently un-muting it afterwards on your own isn't), and going back/forward through
+    // browser history (bfcache restore, no fresh gesture on the resumed page either way) is
+    // squarely the case that tripped it — reproducing, on desktop, the exact "needs a click after
+    // navigation" behavior this was mobile-only before. Reverted to playing at normal volume and
+    // just correcting position on 'playing' as fast as that event allows; the brief artifact this
+    // brings back is the same one already accepted as a tradeoff further up this file.
+    a.addEventListener('playing', function onPlaying() {
+      a.removeEventListener('playing', onPlaying);
+      if (Math.abs(a.currentTime - target) > 0.35) a.currentTime = target;
+    });
+    if (a.readyState >= 1) a.currentTime = target; // harmless best-effort head start where it's cheap — the 'playing' listener above corrects it either way if this gets silently dropped
     const p = a.play();
     if (p && typeof p.catch === 'function') {
       p.catch(() => {
         const retry = () => {
-          seekTo(a, savedPosition());
           a.play().catch(() => {});
           updateButton();
           document.removeEventListener('click', retry, true);
@@ -277,6 +317,11 @@ const Bgm = (() => {
       });
     }
     updateButton();
+  }
+
+  function tryResume() {
+    const a = ensureAudio();
+    playFromSaved(a);
   }
 
   function init() {
@@ -308,10 +353,20 @@ const Bgm = (() => {
   // double-handled (init() already covers that one).
   window.addEventListener('pageshow', (e) => {
     if (!e.persisted) return;
+    // Was a bare audio.play() here, bypassing playFromSaved()'s position-correction entirely —
+    // normally harmless, since a bfcache-frozen page keeps its audio element (and its
+    // currentTime) intact rather than starting fresh like a real page load does, so there's
+    // usually nothing to correct. But "usually" isn't "always" — this is very likely the
+    // specific, rare "some particular interactions still restart it" case still being seen:
+    // browser back specifically, not navigation generally, is exactly the kind of narrow,
+    // occasional trigger that points at this one path. Routed through playFromSaved() now, same
+    // as every other resume path — it's a no-op correction in the common case where currentTime
+    // was already fine, and a real one in the rare case it wasn't.
     if (isOn() && audio && audio.paused) {
-      audio.play().catch(() => {});
+      playFromSaved(audio);
+    } else {
+      updateButton();
     }
-    updateButton();
   });
 
   // called once, right as the startup splash finishes — the tap that began the splash is a
@@ -331,12 +386,11 @@ const Bgm = (() => {
       a.pause();
       savePosition();
       localStorage.setItem(ON_KEY, 'false');
+      updateButton();
     } else {
       localStorage.setItem(ON_KEY, 'true');
-      seekTo(a, savedPosition());
-      a.play().catch(() => {});
+      playFromSaved(a); // updates the button itself once playback actually starts
     }
-    updateButton();
   }
 
   return { init, startFresh, toggle };
@@ -369,7 +423,7 @@ const Theme = (() => {
   function toggle() {
     const light = !isLight();
     document.documentElement.classList.toggle('light-theme', light);
-    localStorage.setItem(KEY, light ? 'light' : 'dark');
+    localStorage.setItem(KEY, light ? 'light' : 'dark'); // an explicit choice from here on always wins over the OS setting below
     updateButtons();
   }
   function init() {
@@ -378,6 +432,19 @@ const Theme = (() => {
     if (btn) btn.addEventListener('click', toggle);
     const mobileBtn = document.getElementById('themeToggleBtnMobile');
     if (mobileBtn) mobileBtn.addEventListener('click', toggle);
+    // Only relevant for someone who has never manually toggled (no saved KEY): if the OS switches
+    // light/dark *while the app is already open* — iOS's own scheduled Dark Mode does this at
+    // sunrise/sunset — follow it live instead of only picking it up on the next full page load.
+    // The blocking <head> script (see the top of every page) already handles the "first paint"
+    // case; this is just keeping an already-open tab in sync after that. Stops listening the
+    // moment an explicit choice exists, same as the <head> script.
+    if (window.matchMedia && !localStorage.getItem(KEY)) {
+      window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', (e) => {
+        if (localStorage.getItem(KEY)) return; // toggled manually since this listener was attached
+        document.documentElement.classList.toggle('light-theme', e.matches);
+        updateButtons();
+      });
+    }
   }
   return { init, toggle };
 })();
